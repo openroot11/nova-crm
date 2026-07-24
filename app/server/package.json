@@ -1,0 +1,21 @@
+{
+  "name": "nova-crm-server",
+  "version": "1.0.0",
+  "description": "Servidor local del CRM Operativo Nova (Ventas, SLA, Turnos, Monitor, Estadisticas, Asesores, Ajustes)",
+  "private": true,
+  "main": "index.js",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "express-session": "^1.18.1",
+    "node-cron": "^3.0.3",
+    "ws": "^8.18.0",
+    "xlsx": "^0.18.5"
+  }
+}

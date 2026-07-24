@@ -1,0 +1,13 @@
+# Dependencias (se reinstalan con npm install)
+node_modules/
+
+# Base de datos en vivo y backups (datos reales de clientes, nunca al repo)
+app/server/data/
+app/server/backups/
+
+# Config local de Claude Code
+.claude/
+
+# Sistema
+Thumbs.db
+.DS_Store

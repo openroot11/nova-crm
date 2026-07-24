@@ -1,0 +1,40 @@
+html,
+body {
+  height: 100%;
+}
+
+body {
+  font-family: 'Inter', system-ui, sans-serif;
+}
+
+.material-symbols-outlined {
+  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+  vertical-align: middle;
+}
+
+.icon-fill {
+  font-variation-settings: 'FILL' 1;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #c3c6d6 transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: #c3c6d6;
+  border-radius: 8px;
+}
+
+/* Igual al pulso usado en el prototipo de Alertas SLA */
+@keyframes pulse-border {
+  0% { box-shadow: 0 0 0 0 rgba(186, 26, 26, 0.4); }
+  70% { box-shadow: 0 0 0 4px rgba(186, 26, 26, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(186, 26, 26, 0); }
+}
+.pulse-border {
+  animation: pulse-border 2s infinite;
+}
