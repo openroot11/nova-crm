@@ -3,6 +3,7 @@ const { db } = require('../db');
 const rotation = require('../rotation');
 const sla = require('../sla');
 const { broadcast } = require('../realtime');
+const { requireRole } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -32,7 +33,7 @@ router.get('/', (req, res) => {
   res.json(advisors);
 });
 
-router.post('/', (req, res) => {
+router.post('/', requireRole('coordinador', 'admin'), (req, res) => {
   const { name, role } = req.body || {};
   if (!name || !name.trim()) return res.status(400).json({ error: 'name es requerido' });
   const maxOrder = db.prepare('SELECT COALESCE(MAX(priority_order), 0) AS m FROM advisors').get().m;
@@ -43,7 +44,7 @@ router.post('/', (req, res) => {
   res.status(201).json(withMetrics(db.prepare('SELECT * FROM advisors WHERE id = ?').get(info.lastInsertRowid)));
 });
 
-router.patch('/:id', (req, res) => {
+router.patch('/:id', requireRole('coordinador', 'admin'), (req, res) => {
   const id = Number(req.params.id);
   const advisor = db.prepare('SELECT * FROM advisors WHERE id = ?').get(id);
   if (!advisor) return res.status(404).json({ error: 'Asesor no encontrado' });
@@ -57,14 +58,14 @@ router.patch('/:id', (req, res) => {
   res.json(withMetrics(db.prepare('SELECT * FROM advisors WHERE id = ?').get(id)));
 });
 
-router.post('/:id/pause', (req, res) => {
+router.post('/:id/pause', requireRole('coordinador', 'admin'), (req, res) => {
   const id = Number(req.params.id);
   rotation.setPaused(id, true);
   broadcast('advisors_changed', { reason: 'paused', id });
   res.json({ ok: true });
 });
 
-router.post('/:id/resume', (req, res) => {
+router.post('/:id/resume', requireRole('coordinador', 'admin'), (req, res) => {
   const id = Number(req.params.id);
   rotation.setPaused(id, false);
   broadcast('advisors_changed', { reason: 'resumed', id });

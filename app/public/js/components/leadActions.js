@@ -115,6 +115,16 @@ export async function markQuoted(lead, ctx, onDone) {
   }
 }
 
+export async function registerFollowup(lead, ctx, onDone) {
+  try {
+    await ctx.api.post(`/api/leads/${lead.id}/followup`);
+    ctx.toast('Seguimiento registrado', 'success');
+    onDone?.();
+  } catch (err) {
+    ctx.toast(err.message, 'error');
+  }
+}
+
 export function openCloseModal(lead, ctx, onDone) {
   openModal({
     title: `Cerrar venta · ${escapeHtml(lead.client_name)}`,

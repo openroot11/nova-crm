@@ -1,8 +1,8 @@
 // Se carga ANTES que app.js. Verifica si hay sesion iniciada; si no, muestra
-// una pantalla de login/creacion de contraseña que cubre toda la interfaz y
-// solo cuando el login es exitoso arranca el resto de la aplicacion
-// (import('./app.js')). Un solo password compartido por todo el equipo,
-// sin cuentas individuales (fuera de alcance para un equipo de 4 personas).
+// una pantalla de login/creacion de la primera cuenta que cubre toda la
+// interfaz y solo cuando el login es exitoso arranca el resto de la
+// aplicacion (import('./app.js')). Cuentas individuales por usuario, cada
+// una con un rol (admin/coordinador/asesor) que el backend hace cumplir.
 
 function renderOverlay(firstRun, onSuccess) {
   const overlay = document.createElement('div');
@@ -14,10 +14,15 @@ function renderOverlay(firstRun, onSuccess) {
         <div class="w-12 h-12 rounded-full bg-primary-container text-on-primary-container flex items-center justify-center font-bold text-lg mb-3">SF</div>
         <h1 class="text-headline-md font-headline-md font-extrabold text-primary text-center">SalesForce CRM</h1>
         <p class="text-body-sm font-body-sm text-on-surface-variant text-center mt-1">
-          ${firstRun ? 'Crea la contraseña del equipo para empezar a usar el sistema.' : 'Ingresa la contraseña del equipo para continuar.'}
+          ${firstRun ? 'Crea la primera cuenta (administrador) para empezar a usar el sistema.' : 'Ingresa con tu usuario para continuar.'}
         </p>
       </div>
       <form id="auth-form" class="space-y-4">
+        <div>
+          <label class="block text-label-bold font-label-bold text-on-surface-variant mb-1 uppercase tracking-wider">Usuario</label>
+          <input id="auth-username" type="text" required autocomplete="username"
+            class="w-full p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none transition-all" />
+        </div>
         <div>
           <label class="block text-label-bold font-label-bold text-on-surface-variant mb-1 uppercase tracking-wider">
             ${firstRun ? 'Nueva contraseña' : 'Contraseña'}
@@ -33,7 +38,7 @@ function renderOverlay(firstRun, onSuccess) {
         </div>` : ''}
         <p id="auth-error" class="text-body-sm font-body-sm text-error hidden"></p>
         <button type="submit" class="w-full py-3 bg-primary text-on-primary rounded-md font-label-bold text-label-bold hover:bg-on-primary-fixed-variant transition-colors">
-          ${firstRun ? 'CREAR CONTRASEÑA E INGRESAR' : 'INGRESAR'}
+          ${firstRun ? 'CREAR CUENTA E INGRESAR' : 'INGRESAR'}
         </button>
       </form>
     </div>
@@ -46,6 +51,7 @@ function renderOverlay(firstRun, onSuccess) {
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     errorEl.classList.add('hidden');
+    const username = overlay.querySelector('#auth-username').value.trim();
     const password = overlay.querySelector('#auth-password').value;
     if (firstRun) {
       const confirm = overlay.querySelector('#auth-password-confirm').value;
@@ -59,7 +65,7 @@ function renderOverlay(firstRun, onSuccess) {
       const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password }),
+        body: JSON.stringify({ username, password }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -67,6 +73,7 @@ function renderOverlay(firstRun, onSuccess) {
         errorEl.classList.remove('hidden');
         return;
       }
+      currentUser = data.user || null;
       overlay.remove();
       onSuccess();
     } catch {
@@ -83,11 +90,18 @@ export function bootApp() {
   import('./app.js');
 }
 
+let currentUser = null;
+export function getCurrentUser() {
+  return currentUser;
+}
+
 // Expuesto para que api.js pueda forzar la vuelta a la pantalla de login
-// cuando cualquier peticion responda 401 (p.ej. la sesion expiro).
+// cuando cualquier peticion responda 401 (p.ej. la sesion expiro), y para
+// que el sidebar pueda ofrecer "Cerrar sesión".
 export function showLoginOverlay() {
   if (document.getElementById('auth-overlay')) return;
   booted = false;
+  currentUser = null;
   renderOverlay(false, () => {
     booted = true;
     location.reload();
@@ -95,8 +109,19 @@ export function showLoginOverlay() {
 }
 window.__novaShowLogin = showLoginOverlay;
 
+export async function logout() {
+  try {
+    await fetch('/api/auth/logout', { method: 'POST' });
+  } catch {
+    /* si falla igual se limpia el estado local y se muestra el login */
+  }
+  currentUser = null;
+  location.reload();
+}
+window.__novaLogout = logout;
+
 async function init() {
-  let session = { authenticated: false, firstRun: true };
+  let session = { authenticated: false, firstRun: true, user: null };
   try {
     const res = await fetch('/api/auth/session');
     session = await res.json();
@@ -105,6 +130,7 @@ async function init() {
   }
 
   if (session.authenticated) {
+    currentUser = session.user;
     bootApp();
     return;
   }

@@ -8,6 +8,7 @@ const session = require('express-session');
 const { getSetting, setSetting } = require('./db'); // asegura schema + seed antes de levantar rutas
 const realtime = require('./realtime');
 const { scheduleWeeklyBackup } = require('./backup');
+const { loadUser, requireRole } = require('./middleware/auth');
 
 const PORT = process.env.PORT || 4000;
 
@@ -35,22 +36,22 @@ app.use(
 
 app.use('/api/auth', require('./routes/auth'));
 
-// Todo el resto de /api/* requiere sesion iniciada. Las rutas de auth
-// (login/logout/session) quedan siempre accesibles para poder autenticarse.
-app.use('/api', (req, res, next) => {
-  if (req.session && req.session.authenticated) return next();
-  return res.status(401).json({ error: 'No autenticado' });
-});
+// Todo el resto de /api/* requiere sesion iniciada; loadUser ademas deja el
+// usuario (con su rol) disponible en req.user para los gates de cada ruta.
+app.use('/api', loadUser);
 
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
 app.use('/api/leads', require('./routes/leads'));
 app.use('/api/advisors', require('./routes/advisors'));
-app.use('/api/kpis', require('./routes/kpis'));
-app.use('/api/settings', require('./routes/settings'));
-app.use('/api/export', require('./routes/exports'));
-app.use('/api/system', require('./routes/system'));
-app.use('/api/informe', require('./routes/informe'));
+app.use('/api/kpis', requireRole('admin', 'coordinador'), require('./routes/kpis'));
+app.use('/api/marketing', requireRole('admin', 'coordinador'), require('./routes/marketing'));
+app.use('/api/reports', requireRole('admin', 'coordinador'), require('./routes/reports'));
+app.use('/api/settings', requireRole('admin'), require('./routes/settings'));
+app.use('/api/export', requireRole('admin'), require('./routes/exports'));
+app.use('/api/system', requireRole('admin'), require('./routes/system'));
+app.use('/api/informe', requireRole('admin', 'coordinador'), require('./routes/informe'));
+app.use('/api/users', requireRole('admin'), require('./routes/users'));
 
 app.get('/api/health', (req, res) => res.json({ ok: true, at: new Date().toISOString() }));
 

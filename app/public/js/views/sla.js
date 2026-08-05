@@ -2,6 +2,8 @@ import { escapeHtml } from '../utils.js';
 import { openReassignModal, markContacted, markQuoted } from '../components/leadActions.js';
 
 export async function mount(container, ctx) {
+  const canReassign = ctx.user?.role !== 'asesor';
+
   container.innerHTML = `
     <div class="mb-gutter flex justify-between items-end flex-wrap gap-gutter">
       <div>
@@ -73,10 +75,10 @@ export async function mount(container, ctx) {
         <td class="p-table-cell-padding text-right">
           <div class="flex justify-end flex-wrap gap-2">
             ${funnelButtons(lead)}
-            <button data-id="${lead.id}" class="reassign-btn bg-error text-on-error hover:bg-error/90 px-4 py-2 rounded-lg font-bold text-body-sm font-body-sm shadow-sm transition-colors inline-flex justify-center items-center gap-2">
+            ${canReassign ? `<button data-id="${lead.id}" class="reassign-btn bg-error text-on-error hover:bg-error/90 px-4 py-2 rounded-lg font-bold text-body-sm font-body-sm shadow-sm transition-colors inline-flex justify-center items-center gap-2">
               <span class="material-symbols-outlined text-[18px]">swap_horiz</span>
               Reasignar Inmediato
-            </button>
+            </button>` : ''}
           </div>
         </td>
       </tr>`;
@@ -95,9 +97,9 @@ export async function mount(container, ctx) {
         <td class="p-table-cell-padding text-right">
           <div class="flex justify-end flex-wrap gap-2">
             ${funnelButtons(lead)}
-            <button data-id="${lead.id}" class="reassign-btn bg-surface-container-highest text-primary hover:bg-primary/10 border border-outline-variant px-4 py-2 rounded-lg font-bold text-body-sm font-body-sm transition-colors">
+            ${canReassign ? `<button data-id="${lead.id}" class="reassign-btn bg-surface-container-highest text-primary hover:bg-primary/10 border border-outline-variant px-4 py-2 rounded-lg font-bold text-body-sm font-body-sm transition-colors">
               Reasignar
-            </button>
+            </button>` : ''}
           </div>
         </td>
       </tr>`;

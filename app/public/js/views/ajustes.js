@@ -1,4 +1,13 @@
 import { confirmFactoryReset } from '../components/leadActions.js';
+import { openModal } from '../components/modal.js';
+import { escapeHtml } from '../utils.js';
+
+const ROLES = [
+  { value: 'admin', label: 'Dueño / Admin' },
+  { value: 'coordinador', label: 'Coordinador' },
+  { value: 'asesor', label: 'Asesor' },
+];
+const ROLE_LABELS = Object.fromEntries(ROLES.map((r) => [r.value, r.label]));
 
 function download(url) {
   const a = document.createElement('a');
@@ -79,6 +88,32 @@ export async function mount(container, ctx) {
           </div>
           <div id="toggles" class="grid grid-cols-1 md:grid-cols-2 gap-6"></div>
         </section>
+
+        <section class="bg-surface-container-lowest border border-outline-variant rounded-xl p-gutter shadow-sm col-span-1 md:col-span-2 mt-4">
+          <div class="flex items-center justify-between gap-3 mb-6 border-b border-outline-variant pb-3">
+            <div class="flex items-center gap-3">
+              <span class="material-symbols-outlined text-on-surface-variant text-2xl">manage_accounts</span>
+              <h3 class="text-headline-md font-headline-md text-on-surface">Usuarios y Roles</h3>
+            </div>
+            <button id="add-user-btn" class="px-4 py-2 bg-primary text-on-primary text-label-bold font-label-bold rounded-lg hover:bg-on-primary-fixed-variant transition-colors flex items-center gap-2 shadow-sm">
+              <span class="material-symbols-outlined text-[18px]">person_add</span> Nuevo usuario
+            </button>
+          </div>
+          <div class="overflow-x-auto">
+            <table class="w-full text-left border-collapse min-w-[640px]">
+              <thead>
+                <tr class="bg-surface-container-low border-b border-outline-variant">
+                  <th class="p-table-cell-padding text-label-bold font-label-bold text-on-surface-variant uppercase tracking-wider">Usuario</th>
+                  <th class="p-table-cell-padding text-label-bold font-label-bold text-on-surface-variant uppercase tracking-wider">Rol</th>
+                  <th class="p-table-cell-padding text-label-bold font-label-bold text-on-surface-variant uppercase tracking-wider">Asesor vinculado</th>
+                  <th class="p-table-cell-padding text-label-bold font-label-bold text-on-surface-variant uppercase tracking-wider">Estado</th>
+                  <th class="p-table-cell-padding text-label-bold font-label-bold text-on-surface-variant uppercase tracking-wider text-right">Acciones</th>
+                </tr>
+              </thead>
+              <tbody id="users-tbody" class="divide-y divide-outline-variant"></tbody>
+            </table>
+          </div>
+        </section>
       </div>
     </div>
   `;
@@ -124,5 +159,171 @@ export async function mount(container, ctx) {
     });
   }
 
-  await load();
+  // --- Usuarios y Roles -----------------------------------------------
+  const usersTbody = container.querySelector('#users-tbody');
+  let advisorsCache = [];
+
+  function userRowHtml(u) {
+    const roleOptions = ROLES.map(
+      (r) => `<option value="${r.value}" ${r.value === u.role ? 'selected' : ''}>${r.label}</option>`
+    ).join('');
+    const advisorOptions =
+      '<option value="">— Sin vincular —</option>' +
+      advisorsCache.map((a) => `<option value="${a.id}" ${a.id === u.advisor_id ? 'selected' : ''}>${escapeHtml(a.name)}</option>`).join('');
+    return `
+      <tr>
+        <td class="p-table-cell-padding font-semibold text-on-surface">${escapeHtml(u.username)}</td>
+        <td class="p-table-cell-padding">
+          <select data-user="${u.id}" class="user-role-select p-1.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-sm outline-none focus:border-primary">
+            ${roleOptions}
+          </select>
+        </td>
+        <td class="p-table-cell-padding">
+          <select data-user="${u.id}" class="user-advisor-select p-1.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-sm outline-none focus:border-primary">
+            ${advisorOptions}
+          </select>
+        </td>
+        <td class="p-table-cell-padding">
+          <span class="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold ${u.active ? 'bg-secondary-container text-on-secondary-container' : 'bg-surface-container-high text-on-surface-variant'}">
+            ${u.active ? 'Activo' : 'Desactivado'}
+          </span>
+        </td>
+        <td class="p-table-cell-padding text-right">
+          <div class="flex justify-end flex-wrap gap-2">
+            <button data-action="reset" data-id="${u.id}" data-username="${escapeHtml(u.username)}" class="px-3 py-1 border border-outline-variant rounded text-body-sm font-label-bold text-on-surface-variant hover:bg-surface-container-low transition-colors">Restablecer clave</button>
+            <button data-action="toggle" data-id="${u.id}" data-active="${u.active ? '1' : '0'}" class="px-3 py-1 border border-outline-variant rounded text-body-sm font-label-bold ${u.active ? 'text-error hover:bg-error-container/20' : 'text-secondary hover:bg-secondary-container/20'} transition-colors">${u.active ? 'Desactivar' : 'Reactivar'}</button>
+          </div>
+        </td>
+      </tr>
+    `;
+  }
+
+  async function loadUsers() {
+    try {
+      const [users, advisors] = await Promise.all([ctx.api.get('/api/users'), ctx.api.get('/api/advisors')]);
+      advisorsCache = advisors.filter((a) => !a.is_group);
+      usersTbody.innerHTML = users.length
+        ? users.map(userRowHtml).join('')
+        : `<tr><td colspan="5" class="p-table-cell-padding py-6 text-center text-body-sm text-on-surface-variant">Sin usuarios registrados.</td></tr>`;
+    } catch (err) {
+      ctx.toast(err.message || 'No se pudo cargar la lista de usuarios', 'error');
+    }
+  }
+
+  usersTbody.addEventListener('change', async (e) => {
+    const roleSelect = e.target.closest('.user-role-select');
+    const advisorSelect = e.target.closest('.user-advisor-select');
+    if (roleSelect) {
+      try {
+        await ctx.api.patch(`/api/users/${roleSelect.dataset.user}`, { role: roleSelect.value });
+        ctx.toast('Rol actualizado', 'success');
+        loadUsers();
+      } catch (err) {
+        ctx.toast(err.message, 'error');
+        loadUsers();
+      }
+    }
+    if (advisorSelect) {
+      try {
+        await ctx.api.patch(`/api/users/${advisorSelect.dataset.user}`, { advisor_id: advisorSelect.value || null });
+        ctx.toast('Asesor vinculado actualizado', 'success');
+      } catch (err) {
+        ctx.toast(err.message, 'error');
+        loadUsers();
+      }
+    }
+  });
+
+  usersTbody.addEventListener('click', async (e) => {
+    const btn = e.target.closest('button[data-action]');
+    if (!btn) return;
+    if (btn.dataset.action === 'toggle') {
+      const active = btn.dataset.active === '1';
+      try {
+        await ctx.api.patch(`/api/users/${btn.dataset.id}`, { active: !active });
+        ctx.toast(active ? 'Usuario desactivado' : 'Usuario reactivado', 'success');
+        loadUsers();
+      } catch (err) {
+        ctx.toast(err.message, 'error');
+      }
+    }
+    if (btn.dataset.action === 'reset') {
+      openModal({
+        title: `Restablecer clave · ${btn.dataset.username}`,
+        render: (body, { close }) => {
+          body.innerHTML = `
+            <label class="block text-label-bold font-label-bold uppercase tracking-wide text-on-surface-variant mb-1">Nueva contraseña</label>
+            <input id="reset-password" type="password" minlength="4" class="w-full p-2.5 border border-outline-variant rounded-md mb-4 outline-none focus:border-primary focus:ring-2 focus:ring-primary/20" />
+            <div class="flex justify-end gap-2">
+              <button id="reset-cancel" class="px-4 py-2 rounded-lg border border-outline-variant hover:bg-surface-container-low">Cancelar</button>
+              <button id="reset-ok" class="px-4 py-2 rounded-lg bg-primary text-on-primary font-bold hover:bg-on-primary-fixed-variant">Guardar</button>
+            </div>
+          `;
+          body.querySelector('#reset-cancel').addEventListener('click', close);
+          body.querySelector('#reset-ok').addEventListener('click', async () => {
+            const password = body.querySelector('#reset-password').value;
+            if (!password || password.length < 4) {
+              ctx.toast('La contraseña debe tener al menos 4 caracteres', 'error');
+              return;
+            }
+            try {
+              await ctx.api.post(`/api/users/${btn.dataset.id}/reset-password`, { password });
+              ctx.toast('Contraseña actualizada', 'success');
+              close();
+            } catch (err) {
+              ctx.toast(err.message, 'error');
+            }
+          });
+        },
+      });
+    }
+  });
+
+  container.querySelector('#add-user-btn').addEventListener('click', () => {
+    openModal({
+      title: 'Nuevo usuario',
+      render: (body, { close }) => {
+        body.innerHTML = `
+          <label class="block text-label-bold font-label-bold uppercase tracking-wide text-on-surface-variant mb-1">Usuario *</label>
+          <input id="new-username" type="text" class="w-full p-2.5 border border-outline-variant rounded-md mb-4 outline-none focus:border-primary focus:ring-2 focus:ring-primary/20" />
+          <label class="block text-label-bold font-label-bold uppercase tracking-wide text-on-surface-variant mb-1">Contraseña *</label>
+          <input id="new-password" type="password" minlength="4" class="w-full p-2.5 border border-outline-variant rounded-md mb-4 outline-none focus:border-primary focus:ring-2 focus:ring-primary/20" />
+          <label class="block text-label-bold font-label-bold uppercase tracking-wide text-on-surface-variant mb-1">Rol *</label>
+          <select id="new-role" class="w-full p-2.5 border border-outline-variant rounded-md mb-4 outline-none focus:border-primary focus:ring-2 focus:ring-primary/20">
+            ${ROLES.map((r) => `<option value="${r.value}">${r.label}</option>`).join('')}
+          </select>
+          <label class="block text-label-bold font-label-bold uppercase tracking-wide text-on-surface-variant mb-1">Asesor vinculado (opcional)</label>
+          <select id="new-advisor" class="w-full p-2.5 border border-outline-variant rounded-md mb-4 outline-none focus:border-primary focus:ring-2 focus:ring-primary/20">
+            <option value="">— Sin vincular —</option>
+            ${advisorsCache.map((a) => `<option value="${a.id}">${escapeHtml(a.name)}</option>`).join('')}
+          </select>
+          <div class="flex justify-end gap-2">
+            <button id="new-cancel" class="px-4 py-2 rounded-lg border border-outline-variant hover:bg-surface-container-low">Cancelar</button>
+            <button id="new-ok" class="px-4 py-2 rounded-lg bg-primary text-on-primary font-bold hover:bg-on-primary-fixed-variant">Crear</button>
+          </div>
+        `;
+        body.querySelector('#new-cancel').addEventListener('click', close);
+        body.querySelector('#new-ok').addEventListener('click', async () => {
+          const username = body.querySelector('#new-username').value.trim();
+          const password = body.querySelector('#new-password').value;
+          const role = body.querySelector('#new-role').value;
+          const advisor_id = body.querySelector('#new-advisor').value || null;
+          if (!username || !password) {
+            ctx.toast('Usuario y contraseña son obligatorios', 'error');
+            return;
+          }
+          try {
+            await ctx.api.post('/api/users', { username, password, role, advisor_id });
+            ctx.toast('Usuario creado', 'success');
+            close();
+            loadUsers();
+          } catch (err) {
+            ctx.toast(err.message, 'error');
+          }
+        });
+      },
+    });
+  });
+
+  await Promise.all([load(), loadUsers()]);
 }

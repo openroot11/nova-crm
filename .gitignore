@@ -8,6 +8,9 @@ app/server/backups/
 # Config local de Claude Code
 .claude/
 
+# Config local del editor
+.vscode/
+
 # Sistema
 Thumbs.db
 .DS_Store

@@ -99,6 +99,35 @@ CREATE TABLE IF NOT EXISTS informe_canales (
   correo INTEGER NOT NULL DEFAULT 0,
   llamadas INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  username TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'asesor' CHECK (role IN ('admin', 'coordinador', 'asesor')),
+  advisor_id INTEGER,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (advisor_id) REFERENCES advisors(id)
+);
+
+CREATE TABLE IF NOT EXISTS ad_spend (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  month TEXT NOT NULL UNIQUE,
+  amount REAL NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS reports (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  type TEXT NOT NULL CHECK (type IN ('rendimiento', 'rentabilidad')),
+  period_from TEXT NOT NULL,
+  period_to TEXT NOT NULL,
+  generated_by INTEGER,
+  generated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  data TEXT NOT NULL,
+  FOREIGN KEY (generated_by) REFERENCES users(id)
+);
 `);
 
 function getSetting(key, fallback = null) {
@@ -135,6 +164,16 @@ function ensureColumn(table, column, ddl) {
 
 ensureColumn('leads', 'source', "source TEXT DEFAULT 'WhatsApp'");
 ensureColumn('leads', 'quoted_at', 'quoted_at TEXT');
+// Origen pagado/organico del lead (Google Ads, Organico, Referido, Otro),
+// independiente del canal (source). Se separa de "source" porque ese campo
+// ya se simplifico para el informe diario (ver migrateSourceV2) y no debe
+// volver a mezclarse; este es el dato que necesita el reporte de
+// rentabilidad de leads (costo por lead / ROI de Google Ads).
+ensureColumn('leads', 'channel_detail', 'channel_detail TEXT');
+// Seguimiento post-cotizacion (ver followup.js): cada vez que alguien
+// insiste con el cliente sobre una cotizacion enviada, se registra aqui.
+ensureColumn('leads', 'last_followup_at', 'last_followup_at TEXT');
+ensureColumn('leads', 'followup_count', 'followup_count INTEGER NOT NULL DEFAULT 0');
 
 // Migracion unica: el canal de entrada se simplifica a las 3 categorias que
 // usa el informe diario real (WhatsApp/Correo/Llamada) en vez de variantes
@@ -173,9 +212,28 @@ function migrateAdvisorsV2() {
   setSetting('migrated_advisors_v2', 'true');
 }
 
+// Migracion unica: el sistema pasa de una sola clave compartida
+// (settings.admin_password_hash) a cuentas individuales (tabla users). Si ya
+// habia una clave compartida configurada, se crea un usuario 'admin' que la
+// hereda tal cual (mismo hash, mismo formato) para que quien ya la conocia
+// pueda seguir entrando sin quedar bloqueado; desde ahi puede crear las
+// cuentas del resto del equipo en Ajustes -> Usuarios. Si nunca hubo clave
+// (instalacion nueva), no se crea nada y el flujo de "primer uso" de
+// auth.js se encarga de crear el primer usuario admin.
+function migrateUsersV1() {
+  const userCount = db.prepare('SELECT COUNT(*) AS c FROM users').get().c;
+  if (userCount > 0) return;
+  const sharedHash = getSetting('admin_password_hash');
+  if (!sharedHash) return;
+  db.prepare(
+    "INSERT INTO users (username, password_hash, role, active) VALUES ('admin', ?, 'admin', 1)"
+  ).run(sharedHash);
+}
+
 migrateStatusV2();
 migrateAdvisorsV2();
 migrateSourceV2();
+migrateUsersV1();
 
 function seedIfEmpty() {
   const count = db.prepare('SELECT COUNT(*) AS c FROM advisors').get().c;

@@ -1,10 +1,44 @@
 import { api } from './api.js';
 import { ws } from './ws.js';
 import { escapeHtml, slaBadge } from './utils.js';
+import { getCurrentUser, logout } from './auth.js';
+
+const user = getCurrentUser();
+
+// Rutas visibles por rol. Un asesor solo necesita operar su propio dia a
+// dia (Ventas/SLA); coordinador suma reportes y equipo; admin ve todo,
+// incluyendo Ajustes (que ademas el backend ya protege con requireRole).
+const ROUTES_BY_ROLE = {
+  admin: ['ventas', 'sla', 'seguimiento', 'informe', 'estadisticas', 'asesores', 'ajustes'],
+  coordinador: ['ventas', 'sla', 'seguimiento', 'informe', 'estadisticas', 'asesores'],
+  asesor: ['ventas', 'sla', 'seguimiento'],
+};
+const allowedRoutes = ROUTES_BY_ROLE[user?.role] || ROUTES_BY_ROLE.asesor;
+
+document.querySelectorAll('.nav-link').forEach((el) => {
+  if (!allowedRoutes.includes(el.dataset.route)) el.closest('li').classList.add('hidden');
+});
+
+const ROLE_LABELS = { admin: 'Dueño / Admin', coordinador: 'Coordinador', asesor: 'Asesor' };
+const sidebarFoot = document.querySelector('#sidebar > div:last-child');
+if (sidebarFoot && user) {
+  sidebarFoot.innerHTML = `
+    <div class="w-10 h-10 rounded-full bg-surface-container-highest flex items-center justify-center font-bold text-on-surface-variant shrink-0">${escapeHtml((user.username || '?').slice(0, 1).toUpperCase())}</div>
+    <div class="min-w-0 flex-1">
+      <p class="text-label-bold font-label-bold truncate">${escapeHtml(user.username)}</p>
+      <p class="text-body-sm font-body-sm text-on-surface-variant truncate">${escapeHtml(ROLE_LABELS[user.role] || user.role)}</p>
+    </div>
+    <button id="logout-btn" class="p-2 text-on-surface-variant hover:text-error transition-colors shrink-0" title="Cerrar sesión">
+      <span class="material-symbols-outlined text-[20px]">logout</span>
+    </button>
+  `;
+  sidebarFoot.querySelector('#logout-btn').addEventListener('click', logout);
+}
 
 const routes = {
   ventas: () => import('./views/ventas.js'),
   sla: () => import('./views/sla.js'),
+  seguimiento: () => import('./views/seguimiento.js'),
   informe: () => import('./views/informe.js'),
   estadisticas: () => import('./views/estadisticas.js'),
   asesores: () => import('./views/asesores.js'),
@@ -14,6 +48,7 @@ const routes = {
 const titles = {
   ventas: 'Registro Operativo',
   sla: 'Control SLA 24h',
+  seguimiento: 'Seguimiento Activo',
   informe: 'Informe Diario',
   estadisticas: 'Rendimiento Comercial',
   asesores: 'Gestión del Equipo',
@@ -63,6 +98,7 @@ const ctx = {
   api,
   ws,
   toast,
+  user,
   search: searchBus,
   navigate: (route) => {
     location.hash = `#/${route}`;
@@ -80,7 +116,7 @@ let currentUnmount = null;
 
 async function render() {
   const hash = location.hash.replace('#/', '') || 'ventas';
-  const route = routes[hash] ? hash : 'ventas';
+  const route = routes[hash] && allowedRoutes.includes(hash) ? hash : 'ventas';
 
   document.querySelectorAll('.nav-link').forEach((el) => {
     const active = el.dataset.route === route;

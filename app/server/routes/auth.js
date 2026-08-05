@@ -1,59 +1,64 @@
 const express = require('express');
-const crypto = require('crypto');
-const { getSetting, setSetting } = require('../db');
+const { db } = require('../db');
+const { hashPassword, verifyPassword } = require('../auth-utils');
 
 const router = express.Router();
 
-const SETTING_KEY = 'admin_password_hash';
-
-// Hash simple con la libreria de crypto que ya trae Node (scrypt), sin
-// depender de bcrypt/argon2 (evita agregar otra dependencia con compilacion
-// nativa). Formato guardado: "saltHex:hashHex".
-function hashPassword(password) {
-  const salt = crypto.randomBytes(16).toString('hex');
-  const hash = crypto.scryptSync(password, salt, 64).toString('hex');
-  return `${salt}:${hash}`;
-}
-
-function verifyPassword(password, stored) {
-  const [salt, hash] = String(stored || '').split(':');
-  if (!salt || !hash) return false;
-  const candidate = crypto.scryptSync(password, salt, 64).toString('hex');
-  const a = Buffer.from(candidate, 'hex');
-  const b = Buffer.from(hash, 'hex');
-  if (a.length !== b.length) return false;
-  return crypto.timingSafeEqual(a, b);
+function serializeUser(user) {
+  const advisor = user.advisor_id ? db.prepare('SELECT name FROM advisors WHERE id = ?').get(user.advisor_id) : null;
+  return {
+    id: user.id,
+    username: user.username,
+    role: user.role,
+    advisor_id: user.advisor_id,
+    advisor_name: advisor ? advisor.name : null,
+  };
 }
 
 router.get('/session', (req, res) => {
-  const hasHash = !!getSetting(SETTING_KEY);
-  res.json({ authenticated: !!(req.session && req.session.authenticated), firstRun: !hasHash });
+  const userCount = db.prepare('SELECT COUNT(*) AS c FROM users').get().c;
+  const userId = req.session && req.session.userId;
+  const user = userId ? db.prepare('SELECT * FROM users WHERE id = ? AND active = 1').get(userId) : null;
+  res.json({
+    authenticated: !!user,
+    firstRun: userCount === 0,
+    user: user ? serializeUser(user) : null,
+  });
 });
 
 router.post('/login', (req, res) => {
-  const { password } = req.body || {};
+  const { username, password } = req.body || {};
   if (!password || !String(password).trim()) {
     return res.status(400).json({ error: 'La contraseña es requerida' });
   }
 
-  const stored = getSetting(SETTING_KEY);
+  const userCount = db.prepare('SELECT COUNT(*) AS c FROM users').get().c;
 
-  if (!stored) {
-    // Primer uso: no hay contraseña configurada todavia. Lo que se envie
-    // ahora se guarda como la contraseña del equipo y se inicia sesion.
+  if (userCount === 0) {
+    // Primer uso real: nadie ha creado ninguna cuenta todavia. Lo que se
+    // envie ahora se guarda como el primer usuario, con rol admin.
+    const cleanUsername = String(username || '').trim();
+    if (!cleanUsername) return res.status(400).json({ error: 'El usuario es requerido' });
     if (String(password).length < 4) {
       return res.status(400).json({ error: 'La contraseña debe tener al menos 4 caracteres' });
     }
-    setSetting(SETTING_KEY, hashPassword(String(password)));
-    req.session.authenticated = true;
-    return res.json({ ok: true, firstRun: true });
+    const info = db
+      .prepare("INSERT INTO users (username, password_hash, role, active) VALUES (?, ?, 'admin', 1)")
+      .run(cleanUsername, hashPassword(String(password)));
+    req.session.userId = info.lastInsertRowid;
+    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(info.lastInsertRowid);
+    return res.json({ ok: true, firstRun: true, user: serializeUser(user) });
   }
 
-  if (!verifyPassword(String(password), stored)) {
-    return res.status(401).json({ error: 'Contraseña incorrecta' });
+  const cleanUsername = String(username || '').trim();
+  const user = cleanUsername
+    ? db.prepare('SELECT * FROM users WHERE username = ? COLLATE NOCASE AND active = 1').get(cleanUsername)
+    : null;
+  if (!user || !verifyPassword(String(password), user.password_hash)) {
+    return res.status(401).json({ error: 'Usuario o contraseña incorrectos' });
   }
-  req.session.authenticated = true;
-  res.json({ ok: true, firstRun: false });
+  req.session.userId = user.id;
+  res.json({ ok: true, firstRun: false, user: serializeUser(user) });
 });
 
 router.post('/logout', (req, res) => {

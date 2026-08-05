@@ -50,10 +50,10 @@ export async function mount(container, ctx) {
     <div class="bg-surface-container-lowest border border-outline-variant rounded-xl p-gutter shadow-sm mt-gutter">
       <div class="flex flex-wrap items-end justify-between gap-4 mb-6">
         <div>
-          <h3 class="text-headline-md font-headline-md text-on-surface">Comparativo por Asesor</h3>
-          <p class="text-body-sm font-body-sm text-on-surface-variant">Embudo asignado → contactado → cotizado → vendido, por rango de fechas</p>
+          <h3 class="text-headline-md font-headline-md text-on-surface">Rendimiento por Asesor</h3>
+          <p class="text-body-sm font-body-sm text-on-surface-variant">Embudo, cumplimiento de SLA y ranking, por rango de fechas — el reporte para comparar al equipo</p>
         </div>
-        <div class="flex items-end gap-3">
+        <div class="flex items-end gap-3 flex-wrap">
           <div>
             <label class="block text-[10px] font-label-bold text-on-surface-variant mb-1 uppercase tracking-wider">Desde</label>
             <input id="funnel-from" type="date" class="p-2 bg-surface-container-lowest border border-outline-variant rounded-md text-body-sm outline-none focus:border-primary" />
@@ -62,12 +62,16 @@ export async function mount(container, ctx) {
             <label class="block text-[10px] font-label-bold text-on-surface-variant mb-1 uppercase tracking-wider">Hasta</label>
             <input id="funnel-to" type="date" class="p-2 bg-surface-container-lowest border border-outline-variant rounded-md text-body-sm outline-none focus:border-primary" />
           </div>
+          <button id="archive-rendimiento-btn" class="px-3 py-2 bg-primary text-on-primary rounded-md text-label-bold font-label-bold hover:bg-on-primary-fixed-variant transition-colors flex items-center gap-1.5">
+            <span class="material-symbols-outlined text-[16px]">archive</span> Generar y archivar
+          </button>
         </div>
       </div>
       <div class="overflow-x-auto">
-        <table class="w-full text-left border-collapse min-w-[820px]">
+        <table class="w-full text-left border-collapse min-w-[980px]">
           <thead>
             <tr class="bg-surface-container-low border-b border-outline-variant">
+              <th class="p-table-cell-padding text-label-bold font-label-bold text-on-surface-variant uppercase tracking-wider text-center">#</th>
               <th class="p-table-cell-padding text-label-bold font-label-bold text-on-surface-variant uppercase tracking-wider">Asesor</th>
               <th class="p-table-cell-padding text-label-bold font-label-bold text-on-surface-variant uppercase tracking-wider text-center">Asignados</th>
               <th class="p-table-cell-padding text-label-bold font-label-bold text-on-surface-variant uppercase tracking-wider text-center">Contactados</th>
@@ -77,6 +81,8 @@ export async function mount(container, ctx) {
               <th class="p-table-cell-padding text-label-bold font-label-bold text-on-surface-variant uppercase tracking-wider text-center">% Contacto</th>
               <th class="p-table-cell-padding text-label-bold font-label-bold text-on-surface-variant uppercase tracking-wider text-center">% Cotización</th>
               <th class="p-table-cell-padding text-label-bold font-label-bold text-on-surface-variant uppercase tracking-wider text-center">% Cierre</th>
+              <th class="p-table-cell-padding text-label-bold font-label-bold text-on-surface-variant uppercase tracking-wider text-center">% SLA</th>
+              <th class="p-table-cell-padding text-label-bold font-label-bold text-on-surface-variant uppercase tracking-wider text-center">Hrs. Prom. Cierre</th>
               <th class="p-table-cell-padding text-label-bold font-label-bold text-on-surface-variant uppercase tracking-wider text-right">Monto Vendido</th>
             </tr>
           </thead>
@@ -84,6 +90,78 @@ export async function mount(container, ctx) {
           <tfoot>
             <tr id="funnel-totales-row" class="bg-surface-container-low font-bold"></tr>
           </tfoot>
+        </table>
+      </div>
+    </div>
+
+    <div class="bg-surface-container-lowest border border-outline-variant rounded-xl p-gutter shadow-sm mt-gutter">
+      <div class="flex flex-wrap items-end justify-between gap-4 mb-6">
+        <div>
+          <h3 class="text-headline-md font-headline-md text-on-surface">Rentabilidad de Leads</h3>
+          <p class="text-body-sm font-body-sm text-on-surface-variant">Leads por canal contra la inversión en Google Ads del periodo</p>
+        </div>
+        <div class="flex items-end gap-3 flex-wrap">
+          <div>
+            <label class="block text-[10px] font-label-bold text-on-surface-variant mb-1 uppercase tracking-wider">Desde</label>
+            <input id="profit-from" type="date" class="p-2 bg-surface-container-lowest border border-outline-variant rounded-md text-body-sm outline-none focus:border-primary" />
+          </div>
+          <div>
+            <label class="block text-[10px] font-label-bold text-on-surface-variant mb-1 uppercase tracking-wider">Hasta</label>
+            <input id="profit-to" type="date" class="p-2 bg-surface-container-lowest border border-outline-variant rounded-md text-body-sm outline-none focus:border-primary" />
+          </div>
+          <button id="archive-rentabilidad-btn" class="px-3 py-2 bg-primary text-on-primary rounded-md text-label-bold font-label-bold hover:bg-on-primary-fixed-variant transition-colors flex items-center gap-1.5">
+            <span class="material-symbols-outlined text-[16px]">archive</span> Generar y archivar
+          </button>
+        </div>
+      </div>
+
+      <div class="flex flex-wrap items-end gap-3 mb-6 p-4 bg-surface-container-low rounded-lg border border-outline-variant">
+        <div>
+          <label class="block text-[10px] font-label-bold text-on-surface-variant mb-1 uppercase tracking-wider">Mes</label>
+          <input id="spend-month" type="month" class="p-2 bg-surface-container-lowest border border-outline-variant rounded-md text-body-sm outline-none focus:border-primary" />
+        </div>
+        <div>
+          <label class="block text-[10px] font-label-bold text-on-surface-variant mb-1 uppercase tracking-wider">Inversión Google Ads (COP)</label>
+          <input id="spend-amount" type="number" min="0" step="1000" placeholder="0" class="p-2 bg-surface-container-lowest border border-outline-variant rounded-md text-body-sm outline-none focus:border-primary w-40" />
+        </div>
+        <button id="spend-save-btn" class="px-3 py-2 border border-outline-variant rounded-md text-label-bold font-label-bold text-primary hover:bg-surface-container-lowest transition-colors">Guardar inversión</button>
+      </div>
+
+      <div id="profit-kpis" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6"></div>
+
+      <div class="overflow-x-auto">
+        <table class="w-full text-left border-collapse min-w-[560px]">
+          <thead>
+            <tr class="bg-surface-container-low border-b border-outline-variant">
+              <th class="p-table-cell-padding text-label-bold font-label-bold text-on-surface-variant uppercase tracking-wider">Canal / Origen</th>
+              <th class="p-table-cell-padding text-label-bold font-label-bold text-on-surface-variant uppercase tracking-wider text-center">Leads</th>
+              <th class="p-table-cell-padding text-label-bold font-label-bold text-on-surface-variant uppercase tracking-wider text-center">Vendidos</th>
+              <th class="p-table-cell-padding text-label-bold font-label-bold text-on-surface-variant uppercase tracking-wider text-center">% Conversión</th>
+              <th class="p-table-cell-padding text-label-bold font-label-bold text-on-surface-variant uppercase tracking-wider text-right">Ingresos</th>
+            </tr>
+          </thead>
+          <tbody id="channels-tbody" class="divide-y divide-outline-variant"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="bg-surface-container-lowest border border-outline-variant rounded-xl p-gutter shadow-sm mt-gutter">
+      <div class="flex items-center gap-3 mb-6 border-b border-outline-variant pb-3">
+        <span class="material-symbols-outlined text-on-surface-variant text-2xl">history</span>
+        <h3 class="text-headline-md font-headline-md text-on-surface">Historial de Reportes</h3>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full text-left border-collapse min-w-[560px]">
+          <thead>
+            <tr class="bg-surface-container-low border-b border-outline-variant">
+              <th class="p-table-cell-padding text-label-bold font-label-bold text-on-surface-variant uppercase tracking-wider">Tipo</th>
+              <th class="p-table-cell-padding text-label-bold font-label-bold text-on-surface-variant uppercase tracking-wider">Periodo</th>
+              <th class="p-table-cell-padding text-label-bold font-label-bold text-on-surface-variant uppercase tracking-wider">Generado</th>
+              <th class="p-table-cell-padding text-label-bold font-label-bold text-on-surface-variant uppercase tracking-wider">Por</th>
+              <th class="p-table-cell-padding text-label-bold font-label-bold text-on-surface-variant uppercase tracking-wider text-right">Exportar</th>
+            </tr>
+          </thead>
+          <tbody id="reports-tbody" class="divide-y divide-outline-variant"></tbody>
         </table>
       </div>
     </div>
@@ -97,6 +175,13 @@ export async function mount(container, ctx) {
   const funnelTotalesRow = container.querySelector('#funnel-totales-row');
   const funnelFrom = container.querySelector('#funnel-from');
   const funnelTo = container.querySelector('#funnel-to');
+  const profitFrom = container.querySelector('#profit-from');
+  const profitTo = container.querySelector('#profit-to');
+  const profitKpis = container.querySelector('#profit-kpis');
+  const channelsTbody = container.querySelector('#channels-tbody');
+  const spendMonth = container.querySelector('#spend-month');
+  const spendAmount = container.querySelector('#spend-amount');
+  const reportsTbody = container.querySelector('#reports-tbody');
 
   async function load() {
     let k;
@@ -201,8 +286,13 @@ export async function mount(container, ctx) {
   }
 
   function funnelRowHtml(r) {
+    const rankBadge =
+      r.rank === 1
+        ? '<span class="inline-flex items-center justify-center w-6 h-6 rounded-full bg-secondary text-on-secondary font-bold text-body-sm">1</span>'
+        : `<span class="text-on-surface-variant font-bold">${r.rank}</span>`;
     return `
       <tr>
+        <td class="p-table-cell-padding text-center">${rankBadge}</td>
         <td class="p-table-cell-padding text-body-md font-semibold text-on-surface">${escapeHtml(r.name)}</td>
         <td class="p-table-cell-padding text-center">${r.asignados}</td>
         <td class="p-table-cell-padding text-center">${r.contactados}</td>
@@ -212,6 +302,8 @@ export async function mount(container, ctx) {
         <td class="p-table-cell-padding text-center">${r.tasa_contacto}%</td>
         <td class="p-table-cell-padding text-center">${r.tasa_cotizacion}%</td>
         <td class="p-table-cell-padding text-center">${r.tasa_cierre}%</td>
+        <td class="p-table-cell-padding text-center ${r.sla_cumplimiento < 85 ? 'text-error font-bold' : ''}">${r.sla_cumplimiento}%</td>
+        <td class="p-table-cell-padding text-center">${r.tiempo_promedio_cierre_h ?? '—'}</td>
         <td class="p-table-cell-padding text-right font-bold">${formatMoney(r.monto_vendido)}</td>
       </tr>
     `;
@@ -232,9 +324,10 @@ export async function mount(container, ctx) {
     if (!funnelTo.value) funnelTo.value = data.to;
     funnelTbody.innerHTML = data.advisors.length
       ? data.advisors.map(funnelRowHtml).join('')
-      : `<tr><td colspan="10" class="p-table-cell-padding py-8 text-center text-body-sm text-on-surface-variant">No hay asesores activos.</td></tr>`;
+      : `<tr><td colspan="13" class="p-table-cell-padding py-8 text-center text-body-sm text-on-surface-variant">No hay asesores activos.</td></tr>`;
     const t = data.totals;
     funnelTotalesRow.innerHTML = `
+      <td class="p-table-cell-padding"></td>
       <td class="p-table-cell-padding">Total</td>
       <td class="p-table-cell-padding text-center">${t.asignados}</td>
       <td class="p-table-cell-padding text-center">${t.contactados}</td>
@@ -244,9 +337,133 @@ export async function mount(container, ctx) {
       <td class="p-table-cell-padding text-center">${t.tasa_contacto}%</td>
       <td class="p-table-cell-padding text-center">${t.tasa_cotizacion}%</td>
       <td class="p-table-cell-padding text-center">${t.tasa_cierre}%</td>
+      <td class="p-table-cell-padding text-center">—</td>
+      <td class="p-table-cell-padding text-center">—</td>
       <td class="p-table-cell-padding text-right">${formatMoney(t.monto_vendido)}</td>
     `;
   }
+
+  // --- Rentabilidad de Leads --------------------------------------------
+  function channelRowHtml(c) {
+    return `
+      <tr>
+        <td class="p-table-cell-padding font-semibold text-on-surface">${escapeHtml(c.channel)}</td>
+        <td class="p-table-cell-padding text-center">${c.leads}</td>
+        <td class="p-table-cell-padding text-center text-secondary font-bold">${c.ganados}</td>
+        <td class="p-table-cell-padding text-center">${c.tasa_conversion}%</td>
+        <td class="p-table-cell-padding text-right font-bold">${formatMoney(c.ingresos)}</td>
+      </tr>
+    `;
+  }
+
+  function kpiTile(label, value, icon) {
+    return `
+      <div class="bg-surface-container-lowest border border-outline-variant rounded-lg p-4">
+        <div class="flex items-center gap-2 mb-1">
+          <span class="material-symbols-outlined text-[16px] text-on-surface-variant">${icon}</span>
+          <p class="text-[10px] font-label-bold text-on-surface-variant uppercase tracking-wider">${label}</p>
+        </div>
+        <p class="text-headline-md font-headline-md text-on-surface">${value}</p>
+      </div>
+    `;
+  }
+
+  async function loadProfitability() {
+    const params = new URLSearchParams();
+    if (profitFrom.value) params.set('from', profitFrom.value);
+    if (profitTo.value) params.set('to', profitTo.value);
+    let data;
+    try {
+      data = await ctx.api.get(`/api/kpis/profitability?${params.toString()}`);
+    } catch {
+      ctx.toast('No se pudo cargar la rentabilidad de leads', 'error');
+      return;
+    }
+    if (!profitFrom.value) profitFrom.value = data.from;
+    if (!profitTo.value) profitTo.value = data.to;
+    if (!spendMonth.value) spendMonth.value = data.to.slice(0, 7);
+
+    const ga = data.google_ads;
+    profitKpis.innerHTML = [
+      kpiTile('Inversión Google Ads', formatMoney(ga.inversion), 'payments'),
+      kpiTile('Costo por Lead', ga.costo_por_lead != null ? formatMoney(ga.costo_por_lead) : '—', 'person_search'),
+      kpiTile('Costo por Venta', ga.costo_por_venta != null ? formatMoney(ga.costo_por_venta) : '—', 'sell'),
+      kpiTile('ROI', ga.roi_pct != null ? `${ga.roi_pct}%` : '—', 'trending_up'),
+    ].join('');
+
+    channelsTbody.innerHTML = data.channels.length
+      ? data.channels.map(channelRowHtml).join('')
+      : `<tr><td colspan="5" class="p-table-cell-padding py-8 text-center text-body-sm text-on-surface-variant">Sin leads en este rango.</td></tr>`;
+  }
+
+  profitFrom.addEventListener('change', loadProfitability);
+  profitTo.addEventListener('change', loadProfitability);
+
+  container.querySelector('#spend-save-btn').addEventListener('click', async () => {
+    if (!spendMonth.value) {
+      ctx.toast('Selecciona el mes', 'error');
+      return;
+    }
+    try {
+      await ctx.api.put(`/api/marketing/ad-spend/${spendMonth.value}`, { amount: spendAmount.value || 0 });
+      ctx.toast('Inversión guardada', 'success');
+      loadProfitability();
+    } catch (err) {
+      ctx.toast(err.message, 'error');
+    }
+  });
+
+  // --- Historial de Reportes ---------------------------------------------
+  const REPORT_TYPE_LABELS = { rendimiento: 'Rendimiento por asesor', rentabilidad: 'Rentabilidad de leads' };
+
+  function reportRowHtml(r) {
+    return `
+      <tr>
+        <td class="p-table-cell-padding text-on-surface">${REPORT_TYPE_LABELS[r.type] || r.type}</td>
+        <td class="p-table-cell-padding text-on-surface-variant">${escapeHtml(r.period_from)} → ${escapeHtml(r.period_to)}</td>
+        <td class="p-table-cell-padding text-on-surface-variant">${escapeHtml((r.generated_at || '').replace('T', ' ').slice(0, 16))}</td>
+        <td class="p-table-cell-padding text-on-surface-variant">${escapeHtml(r.generated_by || '—')}</td>
+        <td class="p-table-cell-padding text-right">
+          <a href="/api/reports/${r.id}/xlsx" class="inline-flex items-center gap-1 text-primary hover:text-on-primary-fixed-variant text-body-sm font-label-bold">
+            <span class="material-symbols-outlined text-[16px]">download</span> Excel
+          </a>
+        </td>
+      </tr>
+    `;
+  }
+
+  async function loadReports() {
+    let reports;
+    try {
+      reports = await ctx.api.get('/api/reports');
+    } catch {
+      ctx.toast('No se pudo cargar el historial de reportes', 'error');
+      return;
+    }
+    reportsTbody.innerHTML = reports.length
+      ? reports.map(reportRowHtml).join('')
+      : `<tr><td colspan="5" class="p-table-cell-padding py-8 text-center text-body-sm text-on-surface-variant">Aún no se ha generado ningún reporte.</td></tr>`;
+  }
+
+  container.querySelector('#archive-rendimiento-btn').addEventListener('click', async () => {
+    try {
+      await ctx.api.post('/api/reports', { type: 'rendimiento', from: funnelFrom.value, to: funnelTo.value });
+      ctx.toast('Reporte de rendimiento archivado', 'success');
+      loadReports();
+    } catch (err) {
+      ctx.toast(err.message, 'error');
+    }
+  });
+
+  container.querySelector('#archive-rentabilidad-btn').addEventListener('click', async () => {
+    try {
+      await ctx.api.post('/api/reports', { type: 'rentabilidad', from: profitFrom.value, to: profitTo.value });
+      ctx.toast('Reporte de rentabilidad archivado', 'success');
+      loadReports();
+    } catch (err) {
+      ctx.toast(err.message, 'error');
+    }
+  });
 
   funnelFrom.addEventListener('change', loadFunnel);
   funnelTo.addEventListener('change', loadFunnel);
@@ -254,8 +471,9 @@ export async function mount(container, ctx) {
   const off = ctx.ws.on('leads_changed', () => {
     load();
     loadFunnel();
+    loadProfitability();
   });
-  await Promise.all([load(), loadFunnel()]);
+  await Promise.all([load(), loadFunnel(), loadProfitability(), loadReports()]);
 
   return () => off();
 }

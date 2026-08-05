@@ -1,6 +1,7 @@
 const express = require('express');
 const { db } = require('../db');
 const sla = require('../sla');
+const reporting = require('../reporting');
 
 const router = express.Router();
 
@@ -82,94 +83,25 @@ router.get('/', (req, res) => {
   });
 });
 
-function monthRangeDefaults() {
-  const now = new Date();
-  const from = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
-  const to = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().slice(0, 10);
-  return { from, to };
-}
-
-function pct(numerator, denominator) {
-  if (!denominator) return 0;
-  return Math.round((numerator / denominator) * 1000) / 10;
-}
-
 /**
  * GET /api/kpis/funnel?from=YYYY-MM-DD&to=YYYY-MM-DD&advisor_id=1
  * Comparativo asignado -> contactado -> cotizado -> vendido/perdido por
- * asesor, en un rango de fechas (por defecto el mes calendario actual).
+ * asesor, en un rango de fechas (por defecto el mes calendario actual), con
+ * cumplimiento de SLA, tiempo promedio de cierre y ranking por monto vendido.
  */
 router.get('/funnel', (req, res) => {
-  const defaults = monthRangeDefaults();
-  const from = req.query.from || defaults.from;
-  const to = req.query.to || defaults.to;
-  const fromTs = `${from} 00:00:00`;
-  const toTs = `${to} 23:59:59`;
+  const report = reporting.computeFunnelReport(req.query.from, req.query.to, req.query.advisor_id);
+  res.json(report);
+});
 
-  let advisors = db.prepare('SELECT * FROM advisors WHERE is_group = 0 AND active = 1 ORDER BY priority_order ASC').all();
-  if (req.query.advisor_id) {
-    // Si se pide explicitamente un asesor puntual, se respeta aunque este
-    // pausado (p.ej. para revisar el historico de alguien que ya no esta activo).
-    advisors = db.prepare('SELECT * FROM advisors WHERE id = ?').all(Number(req.query.advisor_id));
-  }
-
-  const asignadosStmt = db.prepare(
-    'SELECT COUNT(*) AS c FROM leads WHERE assigned_advisor_id = ? AND created_at >= ? AND created_at <= ?'
-  );
-  const contactadosStmt = db.prepare(
-    'SELECT COUNT(*) AS c FROM leads WHERE assigned_advisor_id = ? AND contacted_at IS NOT NULL AND contacted_at >= ? AND contacted_at <= ?'
-  );
-  const cotizadosStmt = db.prepare(
-    'SELECT COUNT(*) AS c FROM leads WHERE assigned_advisor_id = ? AND quoted_at IS NOT NULL AND quoted_at >= ? AND quoted_at <= ?'
-  );
-  const vendidosStmt = db.prepare(
-    "SELECT COUNT(*) AS c, COALESCE(SUM(amount), 0) AS monto FROM leads WHERE assigned_advisor_id = ? AND status = 'cerrado_ganado' AND closed_at >= ? AND closed_at <= ?"
-  );
-  const perdidosStmt = db.prepare(
-    "SELECT COUNT(*) AS c FROM leads WHERE assigned_advisor_id = ? AND status = 'cerrado_perdido' AND closed_at >= ? AND closed_at <= ?"
-  );
-
-  const rows = advisors.map((advisor) => {
-    const asignados = asignadosStmt.get(advisor.id, fromTs, toTs).c;
-    const contactados = contactadosStmt.get(advisor.id, fromTs, toTs).c;
-    const cotizados = cotizadosStmt.get(advisor.id, fromTs, toTs).c;
-    const vendidoRow = vendidosStmt.get(advisor.id, fromTs, toTs);
-    const vendidos = vendidoRow.c;
-    const monto_vendido = vendidoRow.monto;
-    const perdidos = perdidosStmt.get(advisor.id, fromTs, toTs).c;
-
-    return {
-      advisor_id: advisor.id,
-      name: advisor.name,
-      asignados,
-      contactados,
-      cotizados,
-      vendidos,
-      perdidos,
-      monto_vendido,
-      tasa_contacto: pct(contactados, asignados),
-      tasa_cotizacion: pct(cotizados, contactados),
-      tasa_cierre: pct(vendidos, cotizados),
-    };
-  });
-
-  const totals = rows.reduce(
-    (acc, r) => {
-      acc.asignados += r.asignados;
-      acc.contactados += r.contactados;
-      acc.cotizados += r.cotizados;
-      acc.vendidos += r.vendidos;
-      acc.perdidos += r.perdidos;
-      acc.monto_vendido += r.monto_vendido;
-      return acc;
-    },
-    { advisor_id: null, name: 'Total', asignados: 0, contactados: 0, cotizados: 0, vendidos: 0, perdidos: 0, monto_vendido: 0 }
-  );
-  totals.tasa_contacto = pct(totals.contactados, totals.asignados);
-  totals.tasa_cotizacion = pct(totals.cotizados, totals.contactados);
-  totals.tasa_cierre = pct(totals.vendidos, totals.cotizados);
-
-  res.json({ from, to, advisors: rows, totals });
+/**
+ * GET /api/kpis/profitability?from=YYYY-MM-DD&to=YYYY-MM-DD
+ * Rentabilidad de leads por canal/origen contra la inversion de Google Ads
+ * registrada en Ajustes -> Inversión Publicitaria (ver routes/marketing.js).
+ */
+router.get('/profitability', (req, res) => {
+  const report = reporting.computeProfitabilityReport(req.query.from, req.query.to);
+  res.json(report);
 });
 
 module.exports = router;

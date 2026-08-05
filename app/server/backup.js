@@ -39,3 +39,4 @@ function scheduleWeeklyBackup() {
 }
 
 module.exports = { buildFullDump, writeBackupFile, scheduleWeeklyBackup, BACKUPS_DIR };
+
