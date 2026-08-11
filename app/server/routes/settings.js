@@ -4,7 +4,7 @@ const { broadcast } = require('../realtime');
 
 const router = express.Router();
 
-const PUBLIC_KEYS = ['auto_backup_weekly', 'last_backup_at'];
+const PUBLIC_KEYS = ['auto_backup_weekly', 'last_backup_at', 'monthly_sales_target'];
 
 router.get('/', (req, res) => {
   const rows = db.prepare('SELECT key, value FROM settings').all();

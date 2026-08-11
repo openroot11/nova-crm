@@ -16,6 +16,12 @@ function formatDateDisplay(dateStr) {
   return txt.charAt(0).toUpperCase() + txt.slice(1);
 }
 
+function timeLabel(sqliteDatetime) {
+  if (!sqliteDatetime) return '';
+  const d = new Date(sqliteDatetime.replace(' ', 'T') + 'Z');
+  return d.toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' });
+}
+
 function pad(str, len) {
   str = String(str);
   return str + ' '.repeat(Math.max(0, len - str.length));
@@ -103,7 +109,7 @@ export async function mount(container, ctx) {
     <div class="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-gutter">
       <div>
         <h2 class="text-headline-lg font-headline-lg text-on-surface">Informe Diario</h2>
-        <p class="text-body-md font-body-md text-on-surface-variant mt-1">Carga los datos del día y genera el resumen para enviar por WhatsApp.</p>
+        <p class="text-body-md font-body-md text-on-surface-variant mt-1">Datos reales del sistema, listos para enviar por WhatsApp.</p>
       </div>
       <div class="flex items-center gap-2 bg-surface border border-outline-variant rounded-lg p-1.5">
         <button id="btn-prev" class="p-1.5 rounded hover:bg-surface-container-low text-on-surface-variant" title="Día anterior">
@@ -120,7 +126,8 @@ export async function mount(container, ctx) {
     <div class="grid grid-cols-1 xl:grid-cols-12 gap-gutter items-start">
       <div class="xl:col-span-7 space-y-gutter">
         <div class="bg-surface rounded-xl border border-outline-variant shadow-sm p-6">
-          <h3 class="text-headline-md font-headline-md text-on-surface mb-4">Mensajes recibidos</h3>
+          <h3 class="text-headline-md font-headline-md text-on-surface mb-1">Mensajes recibidos</h3>
+          <p class="text-body-sm font-body-sm text-on-surface-variant mb-4">Todo lo que llega ese día, sin excepción — este número no lo sabe el sistema solo, se anota a mano.</p>
           <div class="flex flex-wrap items-end gap-4">
             <div class="flex-1 min-w-[140px]">
               <label class="block text-label-bold font-label-bold text-on-surface-variant mb-1">💬 WhatsApp</label>
@@ -143,8 +150,8 @@ export async function mount(container, ctx) {
 
         <div class="bg-surface rounded-xl border border-outline-variant shadow-sm overflow-hidden">
           <div class="p-6 border-b border-outline-variant">
-            <h3 class="text-headline-md font-headline-md text-on-surface">Datos del día por asesor (manual)</h3>
-            <p class="text-body-sm font-body-sm text-on-surface-variant mt-1">Escribe los números y se guardan solos.</p>
+            <h3 class="text-headline-md font-headline-md text-on-surface">Datos del día por asesor</h3>
+            <p class="text-body-sm font-body-sm text-on-surface-variant mt-1">Tomados en vivo de Ventas — nadie los escribe a mano.</p>
           </div>
           <div class="overflow-x-auto">
             <table class="w-full text-left border-collapse min-w-[520px]">
@@ -166,17 +173,10 @@ export async function mount(container, ctx) {
         </div>
 
         <div class="bg-surface rounded-xl border border-outline-variant shadow-sm p-6">
-          <h3 class="text-headline-md font-headline-md text-on-surface mb-4">Ventas del día</h3>
-          <form id="venta-form" class="grid grid-cols-1 sm:grid-cols-[1fr_1fr_120px_auto] gap-3 mb-4">
-            <select id="v-asesor" required class="p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none">
-              <option value="">Asesor…</option>
-            </select>
-            <input id="v-cliente" type="text" placeholder="Cliente (opcional)" class="p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" />
-            <input id="v-monto" type="number" min="0" step="1" required placeholder="Monto" class="p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" />
-            <button type="submit" class="px-4 py-2 bg-primary text-on-primary rounded-md font-label-bold text-label-bold hover:bg-on-primary-fixed-variant transition-colors whitespace-nowrap">Agregar</button>
-          </form>
+          <h3 class="text-headline-md font-headline-md text-on-surface mb-1">Ventas del día</h3>
+          <p class="text-body-sm font-body-sm text-on-surface-variant mb-4">Se registran desde Ventas o SLA (botón "Cerrar") — aquí solo se muestran.</p>
           <div id="ventas-list" class="divide-y divide-outline-variant"></div>
-          <div id="ventas-empty" class="text-body-sm text-on-surface-variant py-4 text-center hidden">Sin ventas registradas hoy.</div>
+          <div id="ventas-empty" class="text-body-sm text-on-surface-variant py-4 text-center hidden">Sin ventas registradas este día.</div>
         </div>
       </div>
 
@@ -201,8 +201,6 @@ export async function mount(container, ctx) {
   const canalTotal = container.querySelector('#canal-total');
   const statsTbody = container.querySelector('#stats-tbody');
   const statsTotalesRow = container.querySelector('#stats-totales-row');
-  const ventaForm = container.querySelector('#venta-form');
-  const vAsesorSelect = container.querySelector('#v-asesor');
   const ventasList = container.querySelector('#ventas-list');
   const ventasEmpty = container.querySelector('#ventas-empty');
   const reportBox = container.querySelector('#report-text');
@@ -211,29 +209,25 @@ export async function mount(container, ctx) {
 
   function statsRowHtml(a) {
     return `
-      <tr data-advisor-id="${a.advisor_id}">
+      <tr>
         <td class="p-table-cell-padding text-body-md font-semibold text-on-surface">${escapeHtml(a.name)}</td>
-        <td class="p-table-cell-padding text-center"><input type="number" min="0" class="stat-input w-20 text-center p-1.5 border border-outline-variant rounded-md" data-field="asignados" value="${a.asignados}" /></td>
-        <td class="p-table-cell-padding text-center"><input type="number" min="0" class="stat-input w-20 text-center p-1.5 border border-outline-variant rounded-md" data-field="contactados" value="${a.contactados}" /></td>
-        <td class="p-table-cell-padding text-center"><input type="number" min="0" class="stat-input w-20 text-center p-1.5 border border-outline-variant rounded-md" data-field="cotizados" value="${a.cotizados}" /></td>
-        <td class="p-table-cell-padding text-center"><input type="number" min="0" class="stat-input w-20 text-center p-1.5 border border-outline-variant rounded-md" data-field="pendientes" value="${a.pendientes}" /></td>
+        <td class="p-table-cell-padding text-center text-body-md">${a.asignados}</td>
+        <td class="p-table-cell-padding text-center text-body-md">${a.contactados}</td>
+        <td class="p-table-cell-padding text-center text-body-md">${a.cotizados}</td>
+        <td class="p-table-cell-padding text-center text-body-md">${a.pendientes}</td>
       </tr>
     `;
   }
 
   function ventaRowHtml(v) {
     return `
-      <div class="flex items-center justify-between py-2.5" data-id="${v.id}">
+      <div class="flex items-center justify-between py-2.5">
         <div>
           <span class="text-body-md font-semibold text-on-surface">${escapeHtml(v.advisor_name)}</span>
           ${v.cliente ? `<span class="text-body-sm text-on-surface-variant"> · ${escapeHtml(v.cliente)}</span>` : ''}
+          <span class="text-body-sm text-on-surface-variant"> · ${timeLabel(v.created_at)}</span>
         </div>
-        <div class="flex items-center gap-3">
-          <span class="text-body-md font-bold text-secondary">${formatMoney(v.monto)}</span>
-          <button data-action="delete-venta" data-id="${v.id}" class="text-on-surface-variant hover:text-error" title="Eliminar">
-            <span class="material-symbols-outlined text-[18px]">delete</span>
-          </button>
-        </div>
+        <span class="text-body-md font-bold text-secondary">${formatMoney(v.monto)}</span>
       </div>
     `;
   }
@@ -244,29 +238,6 @@ export async function mount(container, ctx) {
     canalCorreo.value = c.correo;
     canalLlamadas.value = c.llamadas;
     canalTotal.textContent = c.whatsapp + c.correo + c.llamadas;
-  }
-
-  async function loadAdvisorOptions() {
-    let advisors = [];
-    try {
-      advisors = (await ctx.api.get('/api/advisors')).filter((a) => !a.is_group && a.active);
-    } catch {
-      /* se reintenta en el siguiente render */
-    }
-    vAsesorSelect.innerHTML = '<option value="">Asesor…</option>' + advisors.map((a) => `<option value="${a.id}">${escapeHtml(a.name)}</option>`).join('');
-  }
-
-  function recomputeTotales() {
-    const t = { asignados: 0, contactados: 0, cotizados: 0, pendientes: 0 };
-    currentData.asesores.forEach((a) => {
-      t.asignados += a.asignados;
-      t.contactados += a.contactados;
-      t.cotizados += a.cotizados;
-      t.pendientes += a.pendientes;
-    });
-    t.ventas_count = currentData.ventas.length;
-    t.ventas_total = currentData.ventas.reduce((s, v) => s + v.monto, 0);
-    currentData.totales = t;
   }
 
   function renderTotalsRow() {
@@ -284,11 +255,6 @@ export async function mount(container, ctx) {
     reportBox.textContent = buildReportText(currentData);
   }
 
-  // load() reconstruye TODA la tabla de inputs — solo se usa al cambiar de fecha,
-  // al montar la vista, o cuando cambian los asesores. NUNCA se debe llamar como
-  // reaccion a guardar un solo campo: reemplazar el HTML mientras el usuario sigue
-  // escribiendo en el campo siguiente de la misma fila borraria lo que aun no ha
-  // confirmado (ver saveStatRow, que actualiza en memoria en su lugar).
   async function load() {
     dateInput.value = currentDate;
     let data;
@@ -311,62 +277,6 @@ export async function mount(container, ctx) {
     ventasEmpty.classList.toggle('hidden', data.ventas.length > 0);
 
     renderReport();
-  }
-
-  function readRowValues(row) {
-    const get = (field) => Number(row.querySelector(`[data-field="${field}"]`).value) || 0;
-    return {
-      asignados: get('asignados'),
-      contactados: get('contactados'),
-      cotizados: get('cotizados'),
-      pendientes: get('pendientes'),
-    };
-  }
-
-  // Refleja el cambio en memoria (totales + informe) al instante, sin esperar
-  // la respuesta del servidor — asi el informe siempre muestra exactamente lo
-  // que hay escrito en la tabla, tecla por tecla.
-  function applyStatPatchLocally(advisorId, patch) {
-    const a = currentData.asesores.find((x) => x.advisor_id === advisorId);
-    if (a) Object.assign(a, patch);
-    recomputeTotales();
-    renderTotalsRow();
-    renderReport();
-  }
-
-  async function persistStatRow(fecha, advisorId, patch) {
-    try {
-      await ctx.api.put(`/api/informe/${fecha}/stats`, { advisor_id: advisorId, ...patch });
-    } catch (err) {
-      ctx.toast(err.message, 'error');
-    }
-  }
-
-  // El guardado en el servidor se demora un poco (debounce) para no disparar
-  // una peticion por cada tecla, pero el informe/los totales se actualizan
-  // de inmediato via applyStatPatchLocally en el listener de "input". Se
-  // guarda fecha+patch junto al timer (no solo el id) para poder "volcar"
-  // los guardados pendientes de inmediato al cambiar de fecha o al salir
-  // de la vista, sin que se disparen despues contra la fecha equivocada.
-  const pendingSaves = new Map(); // advisorId -> { timeoutId, fecha, patch }
-  function scheduleSave(advisorId, patch) {
-    const existing = pendingSaves.get(advisorId);
-    if (existing) clearTimeout(existing.timeoutId);
-    const fecha = currentDate;
-    const timeoutId = setTimeout(() => {
-      pendingSaves.delete(advisorId);
-      persistStatRow(fecha, advisorId, patch);
-    }, 500);
-    pendingSaves.set(advisorId, { timeoutId, fecha, patch });
-  }
-
-  function flushPendingSaves() {
-    pendingSaves.forEach(({ timeoutId, fecha, patch }, advisorId) => {
-      clearTimeout(timeoutId);
-      persistStatRow(fecha, advisorId, patch);
-    });
-    pendingSaves.clear();
-    flushPendingCanalesSave();
   }
 
   async function persistCanales(fecha, patch) {
@@ -420,74 +330,6 @@ export async function mount(container, ctx) {
     });
   });
 
-  statsTbody.addEventListener('input', (e) => {
-    if (!e.target.classList.contains('stat-input')) return;
-    const row = e.target.closest('tr');
-    const advisorId = Number(row.dataset.advisorId);
-    const patch = readRowValues(row);
-    applyStatPatchLocally(advisorId, patch);
-    scheduleSave(advisorId, patch);
-  });
-
-  statsTbody.addEventListener('change', (e) => {
-    // Al salir del campo (blur) o confirmar con Enter: guarda ya mismo en vez
-    // de esperar el debounce de 500ms.
-    if (!e.target.classList.contains('stat-input')) return;
-    const row = e.target.closest('tr');
-    const advisorId = Number(row.dataset.advisorId);
-    const pending = pendingSaves.get(advisorId);
-    if (pending) clearTimeout(pending.timeoutId);
-    pendingSaves.delete(advisorId);
-    persistStatRow(currentDate, advisorId, readRowValues(row));
-  });
-
-  // Solo refresca ventas + totales + informe; nunca reconstruye la tabla de
-  // asesores, para no pisar una edicion de stats en curso en otra fila.
-  async function refreshVentas() {
-    let data;
-    try {
-      data = await ctx.api.get(`/api/informe/${currentDate}`);
-    } catch (err) {
-      ctx.toast('No se pudo actualizar las ventas', 'error');
-      return;
-    }
-    currentData.ventas = data.ventas;
-    recomputeTotales();
-    renderTotalsRow();
-    ventasList.innerHTML = data.ventas.map(ventaRowHtml).join('');
-    ventasEmpty.classList.toggle('hidden', data.ventas.length > 0);
-    renderReport();
-  }
-
-  ventaForm.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const advisor_id = vAsesorSelect.value;
-    const cliente = container.querySelector('#v-cliente').value.trim();
-    const monto = container.querySelector('#v-monto').value;
-    if (!advisor_id) {
-      ctx.toast('Selecciona un asesor', 'error');
-      return;
-    }
-    try {
-      await ctx.api.post(`/api/informe/${currentDate}/ventas`, { advisor_id, cliente, monto });
-      ventaForm.reset();
-      refreshVentas();
-    } catch (err) {
-      ctx.toast(err.message, 'error');
-    }
-  });
-
-  ventasList.addEventListener('click', async (e) => {
-    const btn = e.target.closest('[data-action="delete-venta"]');
-    if (!btn) return;
-    try {
-      await ctx.api.del(`/api/informe/ventas/${btn.dataset.id}`);
-      refreshVentas();
-    } catch (err) {
-      ctx.toast(err.message, 'error');
-    }
-  });
-
   container.querySelector('#btn-copy').addEventListener('click', () => {
     const text = currentData ? buildReportText(currentData) : reportBox.textContent;
     navigator.clipboard
@@ -497,7 +339,7 @@ export async function mount(container, ctx) {
   });
 
   function switchDate(newDate) {
-    flushPendingSaves();
+    flushPendingCanalesSave();
     currentDate = newDate;
     load();
   }
@@ -507,24 +349,24 @@ export async function mount(container, ctx) {
   container.querySelector('#btn-today').addEventListener('click', () => switchDate(todayStr()));
   dateInput.addEventListener('change', () => switchDate(dateInput.value));
 
-  // El propio guardado ya se refleja al instante (saveStatRow actualiza en memoria),
-  // asi que este evento solo importa para cambios desde OTRA pestaña/dispositivo.
-  // Si el usuario esta con el foco en un campo de la tabla, se ignora el refresco
-  // remoto para no interrumpirlo a mitad de tecleo.
+  // Los datos por asesor y las ventas son en vivo: cualquier cambio en Ventas
+  // (marcar contactado/cotizado/cerrar, incluso con fecha atrasada) refresca
+  // este informe solo. Si el usuario esta escribiendo un canal, se ignora el
+  // refresco remoto para no interrumpirlo a mitad de tecleo.
   const offInforme = ctx.ws.on('informe_changed', () => {
-    if (document.activeElement && document.activeElement.classList.contains('stat-input')) return;
+    if (document.activeElement && document.activeElement.classList.contains('canal-input')) return;
     load();
   });
-  const offAdvisors = ctx.ws.on('advisors_changed', () => {
-    loadAdvisorOptions();
+  const offLeads = ctx.ws.on('leads_changed', () => {
+    if (document.activeElement && document.activeElement.classList.contains('canal-input')) return;
     load();
   });
 
-  await Promise.all([loadAdvisorOptions(), load()]);
+  await load();
 
   return () => {
-    flushPendingSaves();
+    flushPendingCanalesSave();
     offInforme();
-    offAdvisors();
+    offLeads();
   };
 }

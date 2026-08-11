@@ -80,6 +80,11 @@ router.get('/', (req, res) => {
       count,
     })),
     total_leads: allLeads.length,
+    monthly_trend: reporting.computeMonthlyTrend(6),
+    monthly_sales_target: (() => {
+      const row = db.prepare("SELECT value FROM settings WHERE key = 'monthly_sales_target'").get();
+      return row ? Number(row.value) : null;
+    })(),
   });
 });
 
@@ -101,6 +106,38 @@ router.get('/funnel', (req, res) => {
  */
 router.get('/profitability', (req, res) => {
   const report = reporting.computeProfitabilityReport(req.query.from, req.query.to);
+  res.json(report);
+});
+
+/**
+ * GET /api/kpis/advisor/:id?from=YYYY-MM-DD&to=YYYY-MM-DD
+ * Ficha individual de un asesor: metricas propias, comparativo con el
+ * equipo, desglose por producto/canal, velocidad de respuesta, seguimiento
+ * y tendencia mensual. Pensado para generar un reporte entregable por persona.
+ */
+router.get('/advisor/:id', (req, res) => {
+  const report = reporting.computeAdvisorReport(req.params.id, req.query.from, req.query.to);
+  if (!report) return res.status(404).json({ error: 'Asesor no encontrado' });
+  res.json(report);
+});
+
+/**
+ * GET /api/kpis/geo?from=YYYY-MM-DD&to=YYYY-MM-DD
+ * Leads por ciudad en el rango, con el producto que mas se vende en cada
+ * una -- para el mapa de Colombia del Dashboard.
+ */
+router.get('/geo', (req, res) => {
+  const report = reporting.computeGeoReport(req.query.from, req.query.to);
+  res.json(report);
+});
+
+/**
+ * GET /api/kpis/flow?from=YYYY-MM-DD&to=YYYY-MM-DD
+ * Flujo canal -> producto -> resultado en el rango, para el diagrama
+ * "Flujo de Leads" de Estadisticas (junto a Rentabilidad de Leads).
+ */
+router.get('/flow', (req, res) => {
+  const report = reporting.computeChannelProductFlow(req.query.from, req.query.to);
   res.json(report);
 });
 

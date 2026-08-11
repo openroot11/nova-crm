@@ -7,59 +7,75 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet" />
 <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet" />
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-chart-sankey@0.14.0/dist/chartjs-chart-sankey.min.js"></script>
 <script id="tailwind-config">
   tailwind.config = {
     darkMode: 'class',
     theme: {
       extend: {
         colors: {
-          'surface-container-low': '#eff4ff',
-          'on-secondary-container': '#007230',
-          'surface-container-high': '#dce9ff',
-          'on-primary-container': '#c4d2ff',
-          outline: '#737685',
-          'error-container': '#ffdad6',
-          error: '#ba1a1a',
-          'primary-fixed': '#dae2ff',
+          // Paleta teal-verde (rediseño inspirado en la referencia "Pulse
+          // CRM"). tertiary/error separados a proposito: antes ambos eran
+          // rojizos (dificiles de distinguir entre "en riesgo" y "vencido");
+          // ahora tertiary=naranja (riesgo/advertencia) y error=rojo
+          // (critico/vencido), siguiendo la escala de estado validada por la
+          // skill dataviz (good/warning/serious/critical).
+          'surface-container-low': '#f7faf8',
+          'on-secondary-container': '#0b3d78',
+          'surface-container-high': '#e6ede9',
+          'on-primary-container': '#04432f',
+          outline: '#7c8b84',
+          'error-container': '#fbdad8',
+          error: '#d03b3b',
+          'primary-fixed': '#d6f0e4',
           'on-primary': '#ffffff',
-          'tertiary-fixed': '#ffdad6',
+          'tertiary-fixed': '#fde1d3',
           'surface-container-lowest': '#ffffff',
-          'tertiary-fixed-dim': '#ffb4ab',
-          'surface-tint': '#0c56d0',
+          'tertiary-fixed-dim': '#f6b48f',
+          'surface-tint': '#0f7a5c',
           'on-error': '#ffffff',
-          'on-surface': '#0d1c2e',
-          'on-tertiary-fixed': '#410002',
-          'secondary-fixed-dim': '#62df7d',
-          'inverse-surface': '#233144',
-          'on-tertiary-fixed-variant': '#93000b',
-          'on-secondary-fixed': '#002109',
-          'on-primary-fixed-variant': '#0040a2',
+          'on-surface': '#10201a',
+          'on-tertiary-fixed': '#431403',
+          'secondary-fixed-dim': '#9dc4f2',
+          'inverse-surface': '#1c2e27',
+          'on-tertiary-fixed-variant': '#a8461f',
+          'on-secondary-fixed': '#062347',
+          'on-primary-fixed-variant': '#0a5d44',
           'on-secondary': '#ffffff',
-          'secondary-fixed': '#7ffc97',
-          surface: '#f8f9ff',
-          'tertiary-container': '#b90012',
-          'on-error-container': '#93000a',
-          'on-surface-variant': '#434654',
-          tertiary: '#8c000a',
+          'secondary-fixed': '#dbe9fb',
+          surface: '#ffffff',
+          'tertiary-container': '#fde1d3',
+          'on-error-container': '#7a1410',
+          'on-surface-variant': '#52625b',
+          tertiary: '#ec835a',
           'on-tertiary': '#ffffff',
-          'surface-dim': '#ccdbf3',
-          'surface-bright': '#f8f9ff',
-          secondary: '#006e2d',
-          'on-tertiary-container': '#ffc5be',
-          'on-secondary-fixed-variant': '#005320',
-          'surface-variant': '#d5e3fc',
-          'on-background': '#0d1c2e',
-          'inverse-primary': '#b2c5ff',
-          'secondary-container': '#7cf994',
-          'primary-container': '#0052cc',
-          'outline-variant': '#c3c6d6',
-          'inverse-on-surface': '#eaf1ff',
-          'primary-fixed-dim': '#b2c5ff',
-          background: '#f8f9ff',
-          'surface-container-highest': '#d5e3fc',
-          primary: '#003d9b',
-          'surface-container': '#e6eeff',
-          'on-primary-fixed': '#001848',
+          'surface-dim': '#dfe7e3',
+          'surface-bright': '#ffffff',
+          secondary: '#2a78d6',
+          'on-tertiary-container': '#7a2c0f',
+          'on-secondary-fixed-variant': '#14509a',
+          'surface-variant': '#dde7e2',
+          'on-background': '#10201a',
+          'inverse-primary': '#7dd6b3',
+          'secondary-container': '#dbe9fb',
+          'primary-container': '#d6f0e4',
+          'outline-variant': '#d6e0da',
+          'inverse-on-surface': '#eef3f0',
+          'primary-fixed-dim': '#7dd6b3',
+          background: '#f3f6f4',
+          'surface-container-highest': '#dde7e2',
+          primary: '#0f7a5c',
+          'surface-container': '#eef3f0',
+          'on-primary-fixed': '#012a1c',
+          // Escala de estado fija (buena/advertencia/grave/critica) para
+          // badges de SLA, acciones prioritarias y tablero Kanban -- no se
+          // usa para series de graficas (esas usan la paleta categorica ya
+          // validada, ver components/colombiaMap.js PRODUCT_COLORS).
+          'status-good': '#0ca30c',
+          'status-warning': '#fab219',
+          'status-serious': '#ec835a',
+          'status-critical': '#d03b3b',
         },
         borderRadius: {
           DEFAULT: '0.125rem',
@@ -101,31 +117,45 @@
 <body class="bg-background font-body-md text-on-background min-h-screen flex">
 
 <!-- Sidebar -->
-<nav id="sidebar" class="fixed left-0 top-0 h-screen w-[240px] bg-surface-container border-r border-outline-variant flex flex-col z-40">
-  <div class="p-6 border-b border-outline-variant flex items-center gap-3">
-    <div class="w-10 h-10 rounded-full bg-primary-container text-on-primary-container flex items-center justify-center font-bold shrink-0">SF</div>
+<nav id="sidebar" class="fixed left-0 top-0 h-screen w-[252px] bg-surface border-r border-outline-variant flex flex-col z-40">
+  <div class="p-5 flex items-center gap-3">
+    <div class="w-10 h-10 rounded-xl bg-primary text-on-primary flex items-center justify-center font-bold shrink-0 shadow-sm">
+      <span class="material-symbols-outlined icon-fill text-[22px]">bolt</span>
+    </div>
     <div class="min-w-0">
-      <h1 class="text-headline-md font-headline-md font-extrabold text-primary leading-tight truncate">SalesForce CRM</h1>
+      <h1 class="text-headline-sm font-headline-sm font-extrabold text-on-surface leading-tight truncate">SalesForce CRM</h1>
       <p class="text-body-sm font-body-sm text-on-surface-variant truncate">Ventas Alta Velocidad</p>
     </div>
   </div>
-  <ul id="nav-list" class="flex-1 overflow-y-auto py-4 px-2 space-y-1">
-    <li><a data-route="ventas" href="#/ventas" class="nav-link flex items-center gap-3 px-4 py-3 rounded-lg text-on-surface-variant hover:bg-surface-container-high transition-colors">
-      <span class="material-symbols-outlined">payments</span><span class="text-label-bold font-label-bold">Ventas</span></a></li>
-    <li><a data-route="sla" href="#/sla" class="nav-link flex items-center gap-3 px-4 py-3 rounded-lg text-on-surface-variant hover:bg-surface-container-high transition-colors">
-      <span class="material-symbols-outlined">timer</span><span class="text-label-bold font-label-bold">SLA</span></a></li>
-    <li><a data-route="seguimiento" href="#/seguimiento" class="nav-link flex items-center gap-3 px-4 py-3 rounded-lg text-on-surface-variant hover:bg-surface-container-high transition-colors">
-      <span class="material-symbols-outlined">campaign</span><span class="text-label-bold font-label-bold">Seguimiento</span></a></li>
-    <li><a data-route="informe" href="#/informe" class="nav-link flex items-center gap-3 px-4 py-3 rounded-lg text-on-surface-variant hover:bg-surface-container-high transition-colors">
-      <span class="material-symbols-outlined">summarize</span><span class="text-label-bold font-label-bold">Informe</span></a></li>
-    <li><a data-route="estadisticas" href="#/estadisticas" class="nav-link flex items-center gap-3 px-4 py-3 rounded-lg text-on-surface-variant hover:bg-surface-container-high transition-colors">
-      <span class="material-symbols-outlined">leaderboard</span><span class="text-label-bold font-label-bold">Estadísticas</span></a></li>
-    <li><a data-route="asesores" href="#/asesores" class="nav-link flex items-center gap-3 px-4 py-3 rounded-lg text-on-surface-variant hover:bg-surface-container-high transition-colors">
-      <span class="material-symbols-outlined">group</span><span class="text-label-bold font-label-bold">Asesores</span></a></li>
-    <li><a data-route="ajustes" href="#/ajustes" class="nav-link flex items-center gap-3 px-4 py-3 rounded-lg text-on-surface-variant hover:bg-surface-container-high transition-colors">
-      <span class="material-symbols-outlined">settings</span><span class="text-label-bold font-label-bold">Ajustes</span></a></li>
+  <ul id="nav-list" class="flex-1 overflow-y-auto py-2 px-3 space-y-0.5">
+    <li><a data-route="dashboard" href="#/dashboard" class="nav-link flex items-center gap-3 px-3 py-2.5 rounded-lg text-on-surface-variant hover:bg-surface-container-low transition-colors">
+      <span class="material-symbols-outlined text-[20px]">dashboard</span><span class="text-label-bold font-label-bold">Dashboard</span></a></li>
+
+    <li>
+      <details data-group="ventas" open class="group/nav">
+        <summary class="nav-group-summary list-none flex items-center gap-3 px-3 py-2.5 rounded-lg text-on-surface-variant hover:bg-surface-container-low transition-colors cursor-pointer select-none">
+          <span class="material-symbols-outlined text-[20px]">payments</span>
+          <span class="text-label-bold font-label-bold flex-1">Ventas</span>
+          <span class="material-symbols-outlined text-[18px] transition-transform group-open/nav:rotate-90">chevron_right</span>
+        </summary>
+        <ul class="mt-0.5 ml-[18px] pl-4 border-l border-outline-variant space-y-0.5">
+          <li><a data-route="ventas" href="#/ventas" class="nav-link flex items-center px-3 py-2 rounded-lg text-body-sm font-body-sm text-on-surface-variant hover:bg-surface-container-low transition-colors">Registro Operativo</a></li>
+          <li><a data-route="sla" href="#/sla" class="nav-link flex items-center px-3 py-2 rounded-lg text-body-sm font-body-sm text-on-surface-variant hover:bg-surface-container-low transition-colors">Control SLA</a></li>
+          <li><a data-route="seguimiento" href="#/seguimiento" class="nav-link flex items-center px-3 py-2 rounded-lg text-body-sm font-body-sm text-on-surface-variant hover:bg-surface-container-low transition-colors">Seguimiento</a></li>
+        </ul>
+      </details>
+    </li>
+
+    <li><a data-route="informe" href="#/informe" class="nav-link flex items-center gap-3 px-3 py-2.5 rounded-lg text-on-surface-variant hover:bg-surface-container-low transition-colors">
+      <span class="material-symbols-outlined text-[20px]">summarize</span><span class="text-label-bold font-label-bold">Informe</span></a></li>
+    <li><a data-route="estadisticas" href="#/estadisticas" class="nav-link flex items-center gap-3 px-3 py-2.5 rounded-lg text-on-surface-variant hover:bg-surface-container-low transition-colors">
+      <span class="material-symbols-outlined text-[20px]">leaderboard</span><span class="text-label-bold font-label-bold">Estadísticas</span></a></li>
+    <li><a data-route="asesores" href="#/asesores" class="nav-link flex items-center gap-3 px-3 py-2.5 rounded-lg text-on-surface-variant hover:bg-surface-container-low transition-colors">
+      <span class="material-symbols-outlined text-[20px]">group</span><span class="text-label-bold font-label-bold">Asesores</span></a></li>
+    <li><a data-route="ajustes" href="#/ajustes" class="nav-link flex items-center gap-3 px-3 py-2.5 rounded-lg text-on-surface-variant hover:bg-surface-container-low transition-colors">
+      <span class="material-symbols-outlined text-[20px]">settings</span><span class="text-label-bold font-label-bold">Ajustes</span></a></li>
   </ul>
-  <div class="p-6 border-t border-outline-variant flex items-center gap-3">
+  <div class="p-5 border-t border-outline-variant flex items-center gap-3">
     <div class="w-10 h-10 rounded-full bg-surface-container-highest flex items-center justify-center font-bold text-on-surface-variant shrink-0">A</div>
     <div class="min-w-0">
       <p class="text-label-bold font-label-bold truncate">Admin User</p>
@@ -137,11 +167,11 @@
 <!-- Main column -->
 <div id="main-col" class="flex-1 ml-[240px] flex flex-col min-h-screen">
   <header id="topbar" class="flex justify-between items-center w-full h-16 px-margin-desktop sticky top-0 z-30 bg-surface border-b border-outline-variant">
-    <h2 id="page-title" class="text-headline-sm font-headline-sm font-bold text-primary">CRM Operativo</h2>
+    <h2 id="page-title" class="text-headline-sm font-headline-sm font-bold text-on-surface">CRM Operativo</h2>
     <div class="flex items-center gap-4">
       <div class="relative hidden md:block">
-        <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant">search</span>
-        <input id="global-search" class="pl-10 pr-4 py-2 bg-surface-container-low border border-outline-variant rounded-full text-body-sm font-body-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary w-64 transition-shadow" placeholder="Buscar cliente, ID..." type="text" />
+        <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant text-[20px]">search</span>
+        <input id="global-search" class="pl-10 pr-4 py-2 bg-surface-container-low border border-transparent rounded-full text-body-sm font-body-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary w-64 transition-shadow" placeholder="Buscar cliente, ID..." type="text" />
       </div>
       <div class="relative">
         <button id="notif-btn" class="p-2 text-on-surface-variant hover:text-primary transition-colors relative" title="Notificaciones">

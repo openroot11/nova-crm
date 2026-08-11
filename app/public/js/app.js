@@ -9,11 +9,16 @@ const user = getCurrentUser();
 // dia (Ventas/SLA); coordinador suma reportes y equipo; admin ve todo,
 // incluyendo Ajustes (que ademas el backend ya protege con requireRole).
 const ROUTES_BY_ROLE = {
-  admin: ['ventas', 'sla', 'seguimiento', 'informe', 'estadisticas', 'asesores', 'ajustes'],
-  coordinador: ['ventas', 'sla', 'seguimiento', 'informe', 'estadisticas', 'asesores'],
+  admin: ['dashboard', 'ventas', 'sla', 'seguimiento', 'informe', 'estadisticas', 'asesores', 'ajustes'],
+  coordinador: ['dashboard', 'ventas', 'sla', 'seguimiento', 'informe', 'estadisticas', 'asesores'],
   asesor: ['ventas', 'sla', 'seguimiento'],
 };
 const allowedRoutes = ROUTES_BY_ROLE[user?.role] || ROUTES_BY_ROLE.asesor;
+// El Dashboard resume datos de todo el equipo (los mismos endpoints de
+// Estadisticas, solo accesibles para admin/coordinador), asi que solo esos
+// roles aterrizan ahi; un asesor sigue entrando directo a Ventas, su
+// pantalla operativa de siempre.
+const DEFAULT_ROUTE = allowedRoutes.includes('dashboard') ? 'dashboard' : 'ventas';
 
 document.querySelectorAll('.nav-link').forEach((el) => {
   if (!allowedRoutes.includes(el.dataset.route)) el.closest('li').classList.add('hidden');
@@ -36,6 +41,7 @@ if (sidebarFoot && user) {
 }
 
 const routes = {
+  dashboard: () => import('./views/dashboard.js'),
   ventas: () => import('./views/ventas.js'),
   sla: () => import('./views/sla.js'),
   seguimiento: () => import('./views/seguimiento.js'),
@@ -46,6 +52,7 @@ const routes = {
 };
 
 const titles = {
+  dashboard: 'Dashboard',
   ventas: 'Registro Operativo',
   sla: 'Control SLA 24h',
   seguimiento: 'Seguimiento Activo',
@@ -115,8 +122,8 @@ globalSearchInput.addEventListener('input', () => {
 let currentUnmount = null;
 
 async function render() {
-  const hash = location.hash.replace('#/', '') || 'ventas';
-  const route = routes[hash] && allowedRoutes.includes(hash) ? hash : 'ventas';
+  const hash = location.hash.replace('#/', '') || DEFAULT_ROUTE;
+  const route = routes[hash] && allowedRoutes.includes(hash) ? hash : DEFAULT_ROUTE;
 
   document.querySelectorAll('.nav-link').forEach((el) => {
     const active = el.dataset.route === route;
@@ -126,6 +133,17 @@ async function render() {
     el.classList.toggle('text-on-surface-variant', !active);
     el.classList.toggle('border-r-4', active);
     el.classList.toggle('border-primary', active);
+  });
+
+  // Grupos colapsables del sidebar (hoy solo "Ventas"): se abren solos y
+  // resaltan el encabezado cuando la ruta activa es una de sus hijas, sin
+  // forzar el cierre si el usuario los abrio manualmente en otra ruta.
+  document.querySelectorAll('details[data-group]').forEach((details) => {
+    const childActive = [...details.querySelectorAll('.nav-link')].some((el) => el.dataset.route === route);
+    if (childActive) details.open = true;
+    const summary = details.querySelector('summary');
+    summary.classList.toggle('text-primary', childActive);
+    summary.classList.toggle('font-bold', childActive);
   });
 
   pageTitle.textContent = titles[route];

@@ -1,5 +1,7 @@
-import { escapeHtml } from '../utils.js';
+import { escapeHtml, slaBadge } from '../utils.js';
 import { openReassignModal, markContacted, markQuoted } from '../components/leadActions.js';
+
+const PAGE_SIZE = 50;
 
 export async function mount(container, ctx) {
   const canReassign = ctx.user?.role !== 'asesor';
@@ -38,14 +40,22 @@ export async function mount(container, ctx) {
           <tbody id="sla-tbody" class="text-body-md font-body-md divide-y divide-outline-variant"></tbody>
         </table>
       </div>
+      <div id="sla-loadmore-wrap" class="hidden p-4 border-t border-outline-variant text-center">
+        <button id="sla-loadmore-btn" class="px-4 py-2 rounded-lg border border-outline-variant text-body-sm font-label-bold text-primary hover:bg-surface-container-low transition-colors">Mostrar más</button>
+        <p id="sla-loadmore-info" class="text-[11px] text-on-surface-variant mt-1"></p>
+      </div>
     </div>
   `;
 
   const tbody = container.querySelector('#sla-tbody');
   const kpiVencidos = container.querySelector('#kpi-vencidos');
   const kpiRiesgo = container.querySelector('#kpi-riesgo');
+  const loadmoreWrap = container.querySelector('#sla-loadmore-wrap');
+  const loadmoreInfo = container.querySelector('#sla-loadmore-info');
+  const loadmoreBtn = container.querySelector('#sla-loadmore-btn');
 
   let critical = [];
+  let visibleCount = PAGE_SIZE;
 
   function funnelButtons(lead) {
     const buttons = [];
@@ -60,49 +70,38 @@ export async function mount(container, ctx) {
 
   function rowHtml(lead) {
     const vencido = lead.sla_status === 'vencido';
-    if (vencido) {
-      return `
-      <tr class="bg-error/5 hover:bg-error/10 transition-colors">
-        <td class="p-table-cell-padding font-bold">${escapeHtml(lead.client_name)}</td>
-        <td class="p-table-cell-padding">${escapeHtml(lead.product || '—')}</td>
-        <td class="p-table-cell-padding text-on-surface-variant">${escapeHtml(lead.advisor_name || 'Pendiente asignación')}</td>
-        <td class="p-table-cell-padding">
-          <div class="inline-flex items-center gap-2 bg-tertiary text-on-tertiary px-3 py-1 rounded-full font-bold pulse-border">
-            <span class="material-symbols-outlined text-[18px]">timer</span>
-            ${escapeHtml(lead.remaining_label)}
-          </div>
-        </td>
-        <td class="p-table-cell-padding text-right">
-          <div class="flex justify-end flex-wrap gap-2">
-            ${funnelButtons(lead)}
-            ${canReassign ? `<button data-id="${lead.id}" class="reassign-btn bg-error text-on-error hover:bg-error/90 px-4 py-2 rounded-lg font-bold text-body-sm font-body-sm shadow-sm transition-colors inline-flex justify-center items-center gap-2">
-              <span class="material-symbols-outlined text-[18px]">swap_horiz</span>
-              Reasignar Inmediato
-            </button>` : ''}
-          </div>
-        </td>
-      </tr>`;
-    }
+    const badge = slaBadge(lead.sla_status);
     return `
-      <tr class="hover:bg-surface-container-low transition-colors">
+      <tr class="${vencido ? 'bg-error/5 hover:bg-error/10' : 'hover:bg-surface-container-low'} transition-colors">
         <td class="p-table-cell-padding font-bold">${escapeHtml(lead.client_name)}</td>
         <td class="p-table-cell-padding">${escapeHtml(lead.product || '—')}</td>
         <td class="p-table-cell-padding text-on-surface-variant">${escapeHtml(lead.advisor_name || 'Pendiente asignación')}</td>
         <td class="p-table-cell-padding">
-          <div class="inline-flex items-center gap-2 bg-tertiary-container text-on-tertiary-container px-3 py-1 rounded-full font-bold border border-tertiary/20">
-            <span class="material-symbols-outlined text-[18px]">warning</span>
+          <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full font-bold ${badge.badgeClass}">
+            <span class="material-symbols-outlined text-[18px]">${vencido ? 'timer' : 'warning'}</span>
             ${escapeHtml(lead.remaining_label)}
           </div>
         </td>
         <td class="p-table-cell-padding text-right">
           <div class="flex justify-end flex-wrap gap-2">
             ${funnelButtons(lead)}
-            ${canReassign ? `<button data-id="${lead.id}" class="reassign-btn bg-surface-container-highest text-primary hover:bg-primary/10 border border-outline-variant px-4 py-2 rounded-lg font-bold text-body-sm font-body-sm transition-colors">
-              Reasignar
+            ${canReassign ? `<button data-id="${lead.id}" class="reassign-btn ${vencido ? 'bg-error text-on-error hover:bg-error/90 shadow-sm' : 'bg-surface-container-highest text-primary hover:bg-primary/10 border border-outline-variant'} px-4 py-2 rounded-lg font-bold text-body-sm font-body-sm transition-colors inline-flex justify-center items-center gap-2">
+              <span class="material-symbols-outlined text-[18px]">swap_horiz</span>
+              ${vencido ? 'Reasignar Inmediato' : 'Reasignar'}
             </button>` : ''}
           </div>
         </td>
       </tr>`;
+  }
+
+  function renderTable() {
+    const shown = critical.slice(0, visibleCount);
+    tbody.innerHTML = shown.length
+      ? shown.map(rowHtml).join('')
+      : `<tr><td colspan="5" class="p-table-cell-padding py-10 text-center text-body-sm text-on-surface-variant">Sin alertas SLA activas. Todo bajo control.</td></tr>`;
+    const remaining = critical.length - shown.length;
+    loadmoreWrap.classList.toggle('hidden', remaining <= 0);
+    if (remaining > 0) loadmoreInfo.textContent = `Mostrando ${shown.length} de ${critical.length} · quedan ${remaining} más urgentes`;
   }
 
   async function load() {
@@ -115,10 +114,13 @@ export async function mount(container, ctx) {
     critical.sort((a, b) => (a.sla_status === b.sla_status ? 0 : a.sla_status === 'vencido' ? -1 : 1));
     kpiVencidos.textContent = critical.filter((l) => l.sla_status === 'vencido').length;
     kpiRiesgo.textContent = critical.filter((l) => l.sla_status === 'riesgo').length;
-    tbody.innerHTML = critical.length
-      ? critical.map(rowHtml).join('')
-      : `<tr><td colspan="5" class="p-table-cell-padding py-10 text-center text-body-sm text-on-surface-variant">Sin alertas SLA activas. Todo bajo control.</td></tr>`;
+    renderTable();
   }
+
+  loadmoreBtn.addEventListener('click', () => {
+    visibleCount += PAGE_SIZE;
+    renderTable();
+  });
 
   tbody.addEventListener('click', (e) => {
     const reassignBtn = e.target.closest('.reassign-btn');

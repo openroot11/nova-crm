@@ -120,13 +120,15 @@ CREATE TABLE IF NOT EXISTS ad_spend (
 
 CREATE TABLE IF NOT EXISTS reports (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  type TEXT NOT NULL CHECK (type IN ('rendimiento', 'rentabilidad')),
+  type TEXT NOT NULL CHECK (type IN ('rendimiento', 'rentabilidad', 'asesor')),
   period_from TEXT NOT NULL,
   period_to TEXT NOT NULL,
+  advisor_id INTEGER,
   generated_by INTEGER,
   generated_at TEXT NOT NULL DEFAULT (datetime('now')),
   data TEXT NOT NULL,
-  FOREIGN KEY (generated_by) REFERENCES users(id)
+  FOREIGN KEY (generated_by) REFERENCES users(id),
+  FOREIGN KEY (advisor_id) REFERENCES advisors(id)
 );
 `);
 
@@ -174,6 +176,11 @@ ensureColumn('leads', 'channel_detail', 'channel_detail TEXT');
 // insiste con el cliente sobre una cotizacion enviada, se registra aqui.
 ensureColumn('leads', 'last_followup_at', 'last_followup_at TEXT');
 ensureColumn('leads', 'followup_count', 'followup_count INTEGER NOT NULL DEFAULT 0');
+// Ciudad de origen del lead (para el mapa de Colombia en el Dashboard). Se
+// guarda como texto libre pero el formulario solo ofrece ciudades de una
+// lista fija (ver public/js/colombia-cities.js) para que coincida con las
+// coordenadas que usa el mapa.
+ensureColumn('leads', 'city', 'city TEXT');
 
 // Migracion unica: el canal de entrada se simplifica a las 3 categorias que
 // usa el informe diario real (WhatsApp/Correo/Llamada) en vez de variantes
@@ -230,10 +237,41 @@ function migrateUsersV1() {
   ).run(sharedHash);
 }
 
+// Migracion unica: la tabla reports se creo originalmente sin advisor_id y
+// con el CHECK de "type" limitado a rendimiento/rentabilidad. SQLite no deja
+// alterar un CHECK existente, asi que se reconstruye la tabla (conservando
+// los datos) para poder archivar tambien fichas individuales por asesor.
+function migrateReportsV2() {
+  if (getSetting('migrated_reports_v2') === 'true') return;
+  const hasAdvisorId = db.prepare("PRAGMA table_info(reports)").all().some((c) => c.name === 'advisor_id');
+  if (!hasAdvisorId) {
+    db.exec(`
+      CREATE TABLE reports_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        type TEXT NOT NULL CHECK (type IN ('rendimiento', 'rentabilidad', 'asesor')),
+        period_from TEXT NOT NULL,
+        period_to TEXT NOT NULL,
+        advisor_id INTEGER,
+        generated_by INTEGER,
+        generated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        data TEXT NOT NULL,
+        FOREIGN KEY (generated_by) REFERENCES users(id),
+        FOREIGN KEY (advisor_id) REFERENCES advisors(id)
+      );
+      INSERT INTO reports_new (id, type, period_from, period_to, generated_by, generated_at, data)
+        SELECT id, type, period_from, period_to, generated_by, generated_at, data FROM reports;
+      DROP TABLE reports;
+      ALTER TABLE reports_new RENAME TO reports;
+    `);
+  }
+  setSetting('migrated_reports_v2', 'true');
+}
+
 migrateStatusV2();
 migrateAdvisorsV2();
 migrateSourceV2();
 migrateUsersV1();
+migrateReportsV2();
 
 function seedIfEmpty() {
   const count = db.prepare('SELECT COUNT(*) AS c FROM advisors').get().c;

@@ -1,5 +1,7 @@
 import { escapeHtml, slaBadge, statusBadge, STATUS_OPTIONS } from '../utils.js';
 import { openAssignModal, openReassignModal, openCloseModal, markContacted, markQuoted } from '../components/leadActions.js';
+import { COLOMBIA_CITY_NAMES } from '../colombia-cities.js';
+import { renderLeadKanban } from '../components/leadKanban.js';
 
 const PRODUCTS = ['Carpas', 'Cortinas', 'Gramas', 'Baby Gym', 'Forros', 'Pisos Vinílicos', 'Otro'];
 const SOURCES = ['WhatsApp', 'Correo', 'Llamada', 'Otro'];
@@ -73,8 +75,25 @@ export async function mount(container, ctx) {
             </div>
           </div>
           <div>
+            <label class="block text-label-bold font-label-bold text-on-surface-variant mb-1 uppercase tracking-wider">Ciudad</label>
+            <select id="f-ciudad" class="w-full p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none transition-all appearance-none cursor-pointer">
+              <option value="">Sin especificar</option>
+              ${COLOMBIA_CITY_NAMES.map((c) => `<option value="${c}">${c}</option>`).join('')}
+            </select>
+          </div>
+          <div>
             <label class="block text-label-bold font-label-bold text-on-surface-variant mb-1 uppercase tracking-wider">Notas Rápidas</label>
             <textarea id="f-notas" rows="3" placeholder="Detalles de la consulta inicial..." class="w-full p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none transition-all resize-none"></textarea>
+          </div>
+          <div>
+            <button type="button" id="toggle-fecha" class="text-body-sm font-label-bold text-primary hover:text-on-primary-fixed-variant transition-colors inline-flex items-center gap-1">
+              <span class="material-symbols-outlined text-[16px]">event</span> ¿Es de un día anterior? Cambia la fecha
+            </button>
+            <div id="fecha-wrap" class="hidden mt-2">
+              <label class="block text-label-bold font-label-bold text-on-surface-variant mb-1 uppercase tracking-wider">Fecha y hora real de registro</label>
+              <input id="f-fecha" type="datetime-local" class="w-full p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none transition-all" />
+              <p class="text-[11px] text-on-surface-variant mt-1">Úsalo para meter clientes atrasados con su fecha real — así los reportes cuadran.</p>
+            </div>
           </div>
           <button type="submit" class="w-full py-3 bg-primary text-on-primary rounded-md font-label-bold text-label-bold hover:bg-on-primary-fixed-variant transition-colors flex items-center justify-center shadow-sm">
             <span class="material-symbols-outlined mr-2 text-[18px]">how_to_reg</span>
@@ -89,9 +108,19 @@ export async function mount(container, ctx) {
             <h3 class="text-headline-md font-headline-md text-on-surface">Leads Registrados</h3>
             <span id="count-badge" class="bg-secondary-container text-on-secondary-container px-2.5 py-0.5 rounded-full text-label-bold font-label-bold flex items-center">0 registros</span>
           </div>
-          <button id="refresh-btn" class="p-2 border border-outline-variant rounded-md hover:bg-surface-container-low transition-colors text-on-surface-variant" title="Actualizar">
-            <span class="material-symbols-outlined text-[20px]">refresh</span>
-          </button>
+          <div class="flex items-center gap-2">
+            <div class="flex border border-outline-variant rounded-md overflow-hidden">
+              <button id="view-table-btn" data-view="table" class="view-toggle-btn p-2 bg-surface-container-lowest transition-colors" title="Vista de tabla">
+                <span class="material-symbols-outlined text-[20px]">table_rows</span>
+              </button>
+              <button id="view-board-btn" data-view="board" class="view-toggle-btn p-2 bg-surface-container-lowest border-l border-outline-variant transition-colors" title="Vista de tablero">
+                <span class="material-symbols-outlined text-[20px]">view_kanban</span>
+              </button>
+            </div>
+            <button id="refresh-btn" class="p-2 border border-outline-variant rounded-md hover:bg-surface-container-low transition-colors text-on-surface-variant" title="Actualizar">
+              <span class="material-symbols-outlined text-[20px]">refresh</span>
+            </button>
+          </div>
         </div>
         <div class="p-4 border-b border-outline-variant bg-surface-container-low flex flex-wrap gap-3 items-end">
           <div>
@@ -138,7 +167,7 @@ export async function mount(container, ctx) {
           </div>
           <button id="filter-clear" class="px-3 py-2 rounded-md border border-outline-variant text-body-sm font-label-bold text-on-surface-variant hover:bg-surface-container-lowest transition-colors">Limpiar filtros</button>
         </div>
-        <div class="overflow-x-auto flex-1">
+        <div id="ventas-table-wrap" class="overflow-x-auto flex-1">
           <table class="w-full text-left border-collapse min-w-[820px]">
             <thead>
               <tr class="bg-surface-container-low border-b border-outline-variant">
@@ -152,6 +181,7 @@ export async function mount(container, ctx) {
             <tbody id="ventas-tbody" class="divide-y divide-outline-variant"></tbody>
           </table>
         </div>
+        <div id="ventas-board-wrap" class="hidden flex-1 overflow-y-auto p-4"></div>
       </div>
     </div>
   `;
@@ -163,6 +193,39 @@ export async function mount(container, ctx) {
   const productoSelect = container.querySelector('#f-producto');
   const productoOtro = container.querySelector('#f-producto-otro');
   const submitBtn = form ? form.querySelector('button[type="submit"]') : null;
+
+  const tableWrap = container.querySelector('#ventas-table-wrap');
+  const boardWrap = container.querySelector('#ventas-board-wrap');
+  const viewTableBtn = container.querySelector('#view-table-btn');
+  const viewBoardBtn = container.querySelector('#view-board-btn');
+  let viewMode = 'table';
+
+  function applyViewMode() {
+    tableWrap.classList.toggle('hidden', viewMode !== 'table');
+    boardWrap.classList.toggle('hidden', viewMode !== 'board');
+    [
+      [viewTableBtn, viewMode === 'table'],
+      [viewBoardBtn, viewMode === 'board'],
+    ].forEach(([btn, active]) => {
+      btn.classList.toggle('bg-primary', active);
+      btn.classList.toggle('text-on-primary', active);
+      btn.classList.toggle('bg-surface-container-lowest', !active);
+      btn.classList.toggle('text-on-surface-variant', !active);
+      // El hover solo se ofrece al boton inactivo -- en el activo taparia el
+      // color de "seleccionado" con el gris de hover.
+      btn.classList.toggle('hover:bg-surface-container-low', !active);
+    });
+  }
+  viewTableBtn.addEventListener('click', () => {
+    viewMode = 'table';
+    applyViewMode();
+  });
+  viewBoardBtn.addEventListener('click', () => {
+    viewMode = 'board';
+    applyViewMode();
+    renderLeadKanban(boardWrap, allLeads, ctx, load);
+  });
+  applyViewMode();
 
   const filterAsesor = container.querySelector('#filter-asesor');
   const filterProducto = container.querySelector('#filter-producto');
@@ -178,6 +241,11 @@ export async function mount(container, ctx) {
   if (canCreate) {
     productoSelect.addEventListener('change', () => {
       productoOtro.classList.toggle('hidden', productoSelect.value !== 'Otro');
+    });
+    const toggleFechaBtn = container.querySelector('#toggle-fecha');
+    const fechaWrap = container.querySelector('#fecha-wrap');
+    toggleFechaBtn.addEventListener('click', () => {
+      fechaWrap.classList.toggle('hidden');
     });
   }
 
@@ -256,7 +324,7 @@ export async function mount(container, ctx) {
         <td class="p-table-cell-padding text-body-md text-on-surface whitespace-nowrap">${timeLabel(lead.created_at)}</td>
         <td class="p-table-cell-padding">
           <div class="text-body-md font-semibold text-on-surface">${escapeHtml(lead.client_name)}</div>
-          <div class="text-body-sm text-on-surface-variant">${escapeHtml(lead.product || '—')} · ${escapeHtml(lead.source || '—')}${lead.channel_detail ? ` · ${escapeHtml(lead.channel_detail)}` : ''}</div>
+          <div class="text-body-sm text-on-surface-variant">${escapeHtml(lead.product || '—')} · ${escapeHtml(lead.source || '—')}${lead.channel_detail ? ` · ${escapeHtml(lead.channel_detail)}` : ''}${lead.city ? ` · ${escapeHtml(lead.city)}` : ''}</div>
         </td>
         <td class="p-table-cell-padding text-body-md text-on-surface">${escapeHtml(lead.advisor_name || 'Sin Asignar')}</td>
         <td class="p-table-cell-padding">${statusCell}</td>
@@ -299,6 +367,7 @@ export async function mount(container, ctx) {
     tbody.innerHTML = allLeads.length
       ? allLeads.map(rowHtml).join('')
       : `<tr><td colspan="5" class="p-table-cell-padding py-10 text-center text-body-sm text-on-surface-variant">No hay leads que coincidan con los filtros.</td></tr>`;
+    if (viewMode === 'board') renderLeadKanban(boardWrap, allLeads, ctx, load);
   }
 
   tbody.addEventListener('click', (e) => {
@@ -337,7 +406,10 @@ export async function mount(container, ctx) {
     const product = productoSelect.value === 'Otro' ? productoOtro.value.trim() || 'Otro' : productoSelect.value;
     const source = container.querySelector('#f-source').value;
     const channel_detail = container.querySelector('#f-origen').value;
+    const city = container.querySelector('#f-ciudad').value;
     const notes = container.querySelector('#f-notas').value.trim();
+    const fechaWrap = container.querySelector('#fecha-wrap');
+    const created_at = !fechaWrap.classList.contains('hidden') ? container.querySelector('#f-fecha').value : '';
     if (!client_name || !phone) {
       ctx.toast('Nombre y teléfono son obligatorios', 'error');
       return;
@@ -347,7 +419,7 @@ export async function mount(container, ctx) {
       return;
     }
     try {
-      const lead = await ctx.api.post('/api/leads', { client_name, phone, document: document_, advisor_id, product, source, channel_detail, notes });
+      const lead = await ctx.api.post('/api/leads', { client_name, phone, document: document_, advisor_id, product, source, channel_detail, city, notes, created_at });
       ctx.toast(`Registrado y asignado a ${lead.advisor_name}`, 'success');
       form.reset();
       productoSelect.value = PRODUCTS[0];
@@ -355,6 +427,8 @@ export async function mount(container, ctx) {
       productoOtro.classList.add('hidden');
       container.querySelector('#f-source').value = DEFAULT_SOURCE;
       container.querySelector('#f-origen').value = DEFAULT_CHANNEL_DETAIL;
+      container.querySelector('#f-ciudad').value = '';
+      fechaWrap.classList.add('hidden');
       load();
     } catch (err) {
       ctx.toast(err.message, 'error');

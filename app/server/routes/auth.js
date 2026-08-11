@@ -1,6 +1,7 @@
 const express = require('express');
 const { db } = require('../db');
 const { hashPassword, verifyPassword } = require('../auth-utils');
+const { resolveUser, AUTH_DISABLED } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -17,11 +18,10 @@ function serializeUser(user) {
 
 router.get('/session', (req, res) => {
   const userCount = db.prepare('SELECT COUNT(*) AS c FROM users').get().c;
-  const userId = req.session && req.session.userId;
-  const user = userId ? db.prepare('SELECT * FROM users WHERE id = ? AND active = 1').get(userId) : null;
+  const user = resolveUser(req);
   res.json({
     authenticated: !!user,
-    firstRun: userCount === 0,
+    firstRun: !AUTH_DISABLED && userCount === 0,
     user: user ? serializeUser(user) : null,
   });
 });

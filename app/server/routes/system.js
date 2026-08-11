@@ -21,8 +21,12 @@ router.post('/factory-reset', (req, res) => {
     db.prepare('DELETE FROM leads').run();
     db.prepare('DELETE FROM informe_stats').run();
     db.prepare('DELETE FROM informe_ventas').run();
+    db.prepare('DELETE FROM ad_spend').run();
+    db.prepare('DELETE FROM reports').run();
     db.prepare('DELETE FROM advisors').run();
-    db.prepare("DELETE FROM sqlite_sequence WHERE name IN ('leads','reassignments','advisors','informe_ventas')").run();
+    db.prepare(
+      "DELETE FROM sqlite_sequence WHERE name IN ('leads','reassignments','advisors','informe_ventas','ad_spend','reports')"
+    ).run();
 
     const insert = db.prepare(
       'INSERT INTO advisors (name, role, active, is_group, priority_order) VALUES (?, ?, 1, 0, ?)'

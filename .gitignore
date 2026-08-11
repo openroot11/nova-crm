@@ -5,6 +5,9 @@ node_modules/
 app/server/data/
 app/server/backups/
 
+# Reportes/exports reales del negocio (facturas, ventas), nunca al repo
+reportes mensuales/
+
 # Config local de Claude Code
 .claude/
 

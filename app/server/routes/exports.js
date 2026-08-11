@@ -30,6 +30,7 @@ router.get('/xlsx', (req, res) => {
       Producto: l.product,
       Canal: l.source,
       Origen: l.channel_detail,
+      Ciudad: l.city,
       Estado: l.status,
       Asesor_ID: l.assigned_advisor_id,
       Monto: l.amount,
@@ -44,7 +45,7 @@ router.get('/xlsx', (req, res) => {
   const ventasSheet = XLSX.utils.json_to_sheet(
     dump.leads
       .filter((l) => l.status === 'cerrado_ganado')
-      .map((l) => ({ ID: l.id, Cliente: l.client_name, Producto: l.product, Canal: l.source, Origen: l.channel_detail, Monto: l.amount, Cerrado: l.closed_at, Asesor_ID: l.assigned_advisor_id }))
+      .map((l) => ({ ID: l.id, Cliente: l.client_name, Producto: l.product, Canal: l.source, Origen: l.channel_detail, Ciudad: l.city, Monto: l.amount, Cerrado: l.closed_at, Asesor_ID: l.assigned_advisor_id }))
   );
   XLSX.utils.book_append_sheet(wb, ventasSheet, 'Ventas');
 

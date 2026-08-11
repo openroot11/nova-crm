@@ -8,7 +8,7 @@ const session = require('express-session');
 const { getSetting, setSetting } = require('./db'); // asegura schema + seed antes de levantar rutas
 const realtime = require('./realtime');
 const { scheduleWeeklyBackup } = require('./backup');
-const { loadUser, requireRole } = require('./middleware/auth');
+const { loadUser, requireRole, AUTH_DISABLED } = require('./middleware/auth');
 
 const PORT = process.env.PORT || 4000;
 
@@ -80,5 +80,11 @@ server.listen(PORT, '0.0.0.0', () => {
     console.log(`  Otros equipos:   http://${ip}:${PORT}`);
   }
   console.log('=========================================');
+  if (AUTH_DISABLED) {
+    console.log('  ATENCION: NOVA_DISABLE_AUTH=true — el login esta');
+    console.log('  DESACTIVADO. Cualquiera con la URL entra como admin,');
+    console.log('  sin usuario ni contraseña. Solo para desarrollo/demo.');
+    console.log('=========================================');
+  }
   console.log('');
 });

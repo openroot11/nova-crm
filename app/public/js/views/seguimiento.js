@@ -1,10 +1,7 @@
-import { escapeHtml } from '../utils.js';
+import { escapeHtml, followupBadge } from '../utils.js';
 import { registerFollowup, openCloseModal } from '../components/leadActions.js';
 
-const FOLLOWUP_LABELS = {
-  pendiente: { label: 'Dar seguimiento', badgeClass: 'bg-tertiary-container text-on-tertiary-container border border-tertiary/20' },
-  urgente: { label: 'Se está enfriando', badgeClass: 'bg-tertiary text-on-tertiary' },
-};
+const PAGE_SIZE = 50;
 
 export async function mount(container, ctx) {
   container.innerHTML = `
@@ -42,17 +39,25 @@ export async function mount(container, ctx) {
           <tbody id="seguimiento-tbody" class="text-body-md font-body-md divide-y divide-outline-variant"></tbody>
         </table>
       </div>
+      <div id="seguimiento-loadmore-wrap" class="hidden p-4 border-t border-outline-variant text-center">
+        <button id="seguimiento-loadmore-btn" class="px-4 py-2 rounded-lg border border-outline-variant text-body-sm font-label-bold text-primary hover:bg-surface-container-low transition-colors">Mostrar más</button>
+        <p id="seguimiento-loadmore-info" class="text-[11px] text-on-surface-variant mt-1"></p>
+      </div>
     </div>
   `;
 
   const tbody = container.querySelector('#seguimiento-tbody');
   const kpiUrgente = container.querySelector('#kpi-urgente');
   const kpiPendiente = container.querySelector('#kpi-pendiente');
+  const loadmoreWrap = container.querySelector('#seguimiento-loadmore-wrap');
+  const loadmoreInfo = container.querySelector('#seguimiento-loadmore-info');
+  const loadmoreBtn = container.querySelector('#seguimiento-loadmore-btn');
 
   let pending = [];
+  let visibleCount = PAGE_SIZE;
 
   function rowHtml(lead) {
-    const meta = FOLLOWUP_LABELS[lead.followup_status] || FOLLOWUP_LABELS.pendiente;
+    const meta = followupBadge(lead.followup_status);
     return `
       <tr class="${lead.followup_status === 'urgente' ? 'bg-error/5 hover:bg-error/10' : 'hover:bg-surface-container-low'} transition-colors">
         <td class="p-table-cell-padding font-bold">${escapeHtml(lead.client_name)}</td>
@@ -74,6 +79,16 @@ export async function mount(container, ctx) {
       </tr>`;
   }
 
+  function renderTable() {
+    const shown = pending.slice(0, visibleCount);
+    tbody.innerHTML = shown.length
+      ? shown.map(rowHtml).join('')
+      : `<tr><td colspan="6" class="p-table-cell-padding py-10 text-center text-body-sm text-on-surface-variant">Sin cotizaciones pendientes de seguimiento. Todo bajo control.</td></tr>`;
+    const remaining = pending.length - shown.length;
+    loadmoreWrap.classList.toggle('hidden', remaining <= 0);
+    if (remaining > 0) loadmoreInfo.textContent = `Mostrando ${shown.length} de ${pending.length} · quedan ${remaining} más`;
+  }
+
   async function load() {
     try {
       pending = await ctx.api.get('/api/leads?followup_only=1');
@@ -84,10 +99,13 @@ export async function mount(container, ctx) {
     pending.sort((a, b) => (a.followup_status === b.followup_status ? 0 : a.followup_status === 'urgente' ? -1 : 1));
     kpiUrgente.textContent = pending.filter((l) => l.followup_status === 'urgente').length;
     kpiPendiente.textContent = pending.filter((l) => l.followup_status === 'pendiente').length;
-    tbody.innerHTML = pending.length
-      ? pending.map(rowHtml).join('')
-      : `<tr><td colspan="6" class="p-table-cell-padding py-10 text-center text-body-sm text-on-surface-variant">Sin cotizaciones pendientes de seguimiento. Todo bajo control.</td></tr>`;
+    renderTable();
   }
+
+  loadmoreBtn.addEventListener('click', () => {
+    visibleCount += PAGE_SIZE;
+    renderTable();
+  });
 
   tbody.addEventListener('click', (e) => {
     const btn = e.target.closest('button[data-action]');
