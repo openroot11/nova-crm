@@ -1,5 +1,5 @@
 @echo off
-title CRM Operativo Nova
+title Nova CRM
 cd /d "%~dp0server"
 
 if not exist node_modules (
@@ -14,7 +14,7 @@ if not exist node_modules (
 )
 
 echo.
-echo Iniciando el CRM Operativo Nova...
+echo Iniciando Nova CRM...
 echo No cierres esta ventana mientras el equipo la este usando.
 echo.
 node index.js

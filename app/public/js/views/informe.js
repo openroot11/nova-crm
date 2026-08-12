@@ -1,4 +1,5 @@
 import { escapeHtml, formatMoney } from '../utils.js';
+import { openQuickSaleModal } from '../components/quickSaleModal.js';
 
 function todayStr() {
   return new Date().toISOString().slice(0, 10);
@@ -10,15 +11,31 @@ function addDays(dateStr, delta) {
   return d.toISOString().slice(0, 10);
 }
 
+function clampToToday(dateStr) {
+  return dateStr > todayStr() ? todayStr() : dateStr;
+}
+
+function isFutureDate(dateStr) {
+  return dateStr > todayStr();
+}
+
 function formatDateDisplay(dateStr) {
   const d = new Date(dateStr + 'T00:00:00');
   const txt = d.toLocaleDateString('es-CO', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
   return txt.charAt(0).toUpperCase() + txt.slice(1);
 }
 
+function parseSqliteDatetime(value) {
+  if (!value) return null;
+  const [datePart, timePart = '00:00:00'] = value.split(' ');
+  const [year, month, day] = datePart.split('-').map(Number);
+  const [hour, minute, second] = timePart.split(':').map(Number);
+  return new Date(year, month - 1, day, hour || 0, minute || 0, second || 0);
+}
+
 function timeLabel(sqliteDatetime) {
-  if (!sqliteDatetime) return '';
-  const d = new Date(sqliteDatetime.replace(' ', 'T') + 'Z');
+  const d = parseSqliteDatetime(sqliteDatetime);
+  if (!d) return '';
   return d.toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' });
 }
 
@@ -29,75 +46,61 @@ function pad(str, len) {
 
 function buildReportText(data) {
   const { fecha, asesores, ventas, totales, canales } = data;
-  const DIV = '─────────────────────';
-  const maxNameLen = Math.max(6, ...asesores.map((a) => a.name.length));
+  const totalCanales = canales.whatsapp + canales.correo + canales.llamadas;
+  const activeAsesores = asesores.filter((a) => a.asignados || a.contactados || a.cotizados || a.pendientes);
+  const topAsesor = activeAsesores.slice().sort((a, b) => (b.cotizados - a.cotizados) || (b.contactados - a.contactados) || (b.asignados - a.asignados))[0];
+  const topVenta = ventas.slice().sort((a, b) => b.monto - a.monto)[0];
 
   const lines = [];
   lines.push('🧾 *INFORME DIARIO*');
   lines.push('📅 ' + formatDateDisplay(fecha));
   lines.push('');
-  if (canales) {
-    const totalCanales = canales.whatsapp + canales.correo + canales.llamadas;
-    lines.push(DIV);
-    lines.push('📨 LEADS DEL DIA: ' + totalCanales);
-    lines.push(DIV);
-    lines.push('💬 WhatsApp: ' + canales.whatsapp);
-    lines.push('📧 Correo: ' + canales.correo);
-    lines.push('📞 Llamadas: ' + canales.llamadas);
-    lines.push('');
+  lines.push('*Resumen del día*');
+  lines.push(`• Leads: ${totalCanales} (WSP ${canales.whatsapp} · Email ${canales.correo} · Llamadas ${canales.llamadas})`);
+  lines.push(`• Ventas cerradas: ${totales.ventas_count}`);
+  lines.push(`• Total vendido: ${formatMoney(totales.ventas_total)}`);
+  lines.push(`• Declinados: ${totales.declinados_count}`);
+  lines.push(`• Pendientes: ${totales.pendientes}`);
+  if (topAsesor) {
+    lines.push(`• Asesor destacado: ${topAsesor.name} — ${topAsesor.contactados} contactados, ${topAsesor.cotizados} cotizaciones`);
   }
-  lines.push(DIV);
-  lines.push('📊 *RESUMEN DEL DIA*');
-  lines.push(DIV);
-  lines.push('```');
-  lines.push(pad('ASESOR', maxNameLen) + '  ASIG  CONT  COT  PEND');
-  asesores.forEach((a) => {
-    lines.push(
-      pad(a.name.toUpperCase(), maxNameLen) +
-        '  ' +
-        pad(String(a.asignados), 4) +
-        '  ' +
-        pad(String(a.contactados), 4) +
-        '  ' +
-        pad(String(a.cotizados), 3) +
-        '  ' +
-        pad(String(a.pendientes), 4)
-    );
-  });
-  lines.push(
-    pad('TOTAL', maxNameLen) +
-      '  ' +
-      pad(String(totales.asignados), 4) +
-      '  ' +
-      pad(String(totales.contactados), 4) +
-      '  ' +
-      pad(String(totales.cotizados), 3) +
-      '  ' +
-      pad(String(totales.pendientes), 4)
-  );
-  lines.push('```');
+  if (topVenta) {
+    lines.push(`• Mayor venta: ${topVenta.advisor_name} — ${formatMoney(topVenta.monto)}${topVenta.cliente ? ' · ' + topVenta.cliente : ''}`);
+  }
   lines.push('');
-  lines.push(DIV);
-  lines.push('💰 *VENTAS: ' + totales.ventas_count + '*');
-  lines.push(DIV);
-  if (ventas.length === 0) {
-    lines.push('Sin ventas registradas hoy.');
-  } else {
-    const porAsesor = {};
-    ventas.forEach((v) => {
-      if (!porAsesor[v.advisor_name]) porAsesor[v.advisor_name] = { cantidad: 0, valor: 0 };
-      porAsesor[v.advisor_name].cantidad++;
-      porAsesor[v.advisor_name].valor += v.monto;
+  lines.push('*Detalle por asesor*');
+  if (activeAsesores.length) {
+    activeAsesores.forEach((a) => {
+      lines.push(`• ${a.name}: Asig ${a.asignados} · Cont ${a.contactados} · Cot ${a.cotizados} · Pend ${a.pendientes}`);
     });
-    Object.keys(porAsesor)
-      .sort()
-      .forEach((nombre) => {
-        const v = porAsesor[nombre];
-        lines.push('• ' + nombre.toUpperCase() + ': ' + v.cantidad + ' venta' + (v.cantidad > 1 ? 's' : '') + ' — ' + formatMoney(v.valor));
-      });
+  } else {
+    lines.push('• No hay asesores activos hoy.');
   }
   lines.push('');
-  lines.push('✅ *TOTAL VENDIDO: ' + formatMoney(totales.ventas_total) + '*');
+  lines.push('*Ventas destacadas*');
+  if (ventas.length === 0) {
+    lines.push('• No se registraron ventas hoy.');
+  } else {
+    ventas.slice(0, 3).forEach((v) => {
+      lines.push(`• ${timeLabel(v.created_at)} · ${v.advisor_name} · ${formatMoney(v.monto)}${v.cliente ? ' · ' + v.cliente : ''}`);
+    });
+    if (ventas.length > 3) {
+      lines.push(`• +${ventas.length - 3} ventas adicionales.`);
+    }
+  }
+  lines.push('');
+  lines.push('*Observaciones*');
+  if (totales.pendientes > 0) {
+    lines.push(`• ${totales.pendientes} pendientes por cerrar.`);
+  } else {
+    lines.push('• No hay pendientes abiertos.');
+  }
+  const notContacted = totales.asignados - totales.contactados;
+  if (notContacted > 0) {
+    lines.push(`• ${notContacted} leads aún sin contacto.`);
+  }
+  lines.push('');
+  lines.push('✅ Informe listo para copiar y pegar en WhatsApp');
 
   return lines.join('\n');
 }
@@ -146,13 +149,12 @@ export async function mount(container, ctx) {
               <div class="text-label-bold font-label-bold uppercase tracking-wider mt-1">Total</div>
             </div>
           </div>
+          <p id="canal-save-status" class="text-[11px] font-label-bold text-on-surface-variant mt-3">Los datos de canales se guardan automáticamente.</p>
         </div>
 
-        <div class="bg-surface rounded-xl border border-outline-variant shadow-sm overflow-hidden">
-          <div class="p-6 border-b border-outline-variant">
-            <h3 class="text-headline-md font-headline-md text-on-surface">Datos del día por asesor</h3>
-            <p class="text-body-sm font-body-sm text-on-surface-variant mt-1">Tomados en vivo de Ventas — nadie los escribe a mano.</p>
-          </div>
+        <div class="bg-surface rounded-xl border border-outline-variant shadow-sm p-6">
+          <h3 class="text-headline-md font-headline-md text-on-surface mb-1">Detalle por Asesor</h3>
+          <p class="text-body-sm font-body-sm text-on-surface-variant mb-4">Tomados en vivo de Ventas — nadie los escribe a mano.</p>
           <div class="overflow-x-auto">
             <table class="w-full text-left border-collapse min-w-[520px]">
               <thead>
@@ -173,10 +175,22 @@ export async function mount(container, ctx) {
         </div>
 
         <div class="bg-surface rounded-xl border border-outline-variant shadow-sm p-6">
-          <h3 class="text-headline-md font-headline-md text-on-surface mb-1">Ventas del día</h3>
-          <p class="text-body-sm font-body-sm text-on-surface-variant mb-4">Se registran desde Ventas o SLA (botón "Cerrar") — aquí solo se muestran.</p>
+          <div class="flex items-center justify-between mb-1 gap-3 flex-wrap">
+            <h3 class="text-headline-md font-headline-md text-on-surface">Ventas del día</h3>
+            <button id="btn-quick-sale" class="px-3 py-1.5 bg-primary text-on-primary rounded-md font-label-bold text-label-bold hover:opacity-90 transition-colors flex items-center gap-1.5">
+              <span class="material-symbols-outlined text-[18px]">bolt</span> Registrar venta
+            </button>
+          </div>
+          <p class="text-body-sm font-body-sm text-on-surface-variant mb-4">Se registran desde Ventas o SLA (botón "Cerrar"), o al vuelo aquí mismo con "Registrar venta".</p>
           <div id="ventas-list" class="divide-y divide-outline-variant"></div>
           <div id="ventas-empty" class="text-body-sm text-on-surface-variant py-4 text-center hidden">Sin ventas registradas este día.</div>
+        </div>
+
+        <div class="bg-surface rounded-xl border border-outline-variant shadow-sm p-6">
+          <h3 class="text-headline-md font-headline-md text-on-surface mb-1">Declinados del día</h3>
+          <p class="text-body-sm font-body-sm text-on-surface-variant mb-4">Leads cerrados como perdidos ese día — clientes con los que no se llegó a nada.</p>
+          <div id="declinados-list" class="divide-y divide-outline-variant"></div>
+          <div id="declinados-empty" class="text-body-sm text-on-surface-variant py-4 text-center hidden">Sin declinados este día.</div>
         </div>
       </div>
 
@@ -195,14 +209,19 @@ export async function mount(container, ctx) {
   `;
 
   const dateInput = container.querySelector('#date-input');
+  const btnPrev = container.querySelector('#btn-prev');
+  const btnNext = container.querySelector('#btn-next');
   const canalWhatsapp = container.querySelector('#canal-whatsapp');
   const canalCorreo = container.querySelector('#canal-correo');
   const canalLlamadas = container.querySelector('#canal-llamadas');
   const canalTotal = container.querySelector('#canal-total');
+  const canalSaveStatus = container.querySelector('#canal-save-status');
   const statsTbody = container.querySelector('#stats-tbody');
   const statsTotalesRow = container.querySelector('#stats-totales-row');
   const ventasList = container.querySelector('#ventas-list');
   const ventasEmpty = container.querySelector('#ventas-empty');
+  const declinadosList = container.querySelector('#declinados-list');
+  const declinadosEmpty = container.querySelector('#declinados-empty');
   const reportBox = container.querySelector('#report-text');
 
   let currentData = null;
@@ -232,12 +251,44 @@ export async function mount(container, ctx) {
     `;
   }
 
+  function declinadoRowHtml(d) {
+    return `
+      <div class="flex items-center justify-between py-2.5">
+        <div>
+          <span class="text-body-md font-semibold text-on-surface">${escapeHtml(d.advisor_name)}</span>
+          ${d.cliente ? `<span class="text-body-sm text-on-surface-variant"> · ${escapeHtml(d.cliente)}</span>` : ''}
+        </div>
+        <span class="text-body-sm text-on-surface-variant">${timeLabel(d.created_at)}</span>
+      </div>
+    `;
+  }
+
+  const defaultCanalStatus = 'Los datos de canales se guardan automáticamente.';
+  let canalSaveTimer = null;
+
+  function setCanalSaveStatus(text, kind = 'info', duration = 0) {
+    if (canalSaveTimer) {
+      clearTimeout(canalSaveTimer);
+      canalSaveTimer = null;
+    }
+    canalSaveStatus.textContent = text;
+    canalSaveStatus.className = `text-[11px] font-label-bold mt-3 ${
+      kind === 'error' ? 'text-error' : kind === 'success' ? 'text-secondary' : 'text-on-surface-variant'
+    }`;
+    if (duration > 0) {
+      canalSaveTimer = setTimeout(() => {
+        setCanalSaveStatus(defaultCanalStatus, 'info');
+      }, duration);
+    }
+  }
+
   function renderCanales() {
     const c = currentData.canales;
     canalWhatsapp.value = c.whatsapp;
     canalCorreo.value = c.correo;
     canalLlamadas.value = c.llamadas;
     canalTotal.textContent = c.whatsapp + c.correo + c.llamadas;
+    setCanalSaveStatus(defaultCanalStatus, 'info');
   }
 
   function renderTotalsRow() {
@@ -255,13 +306,22 @@ export async function mount(container, ctx) {
     reportBox.textContent = buildReportText(currentData);
   }
 
+  async function updateDateControls() {
+    dateInput.max = todayStr();
+    btnNext.disabled = isFutureDate(currentDate) || currentDate === todayStr();
+  }
+
   async function load() {
+    currentDate = clampToToday(currentDate);
     dateInput.value = currentDate;
+    reportBox.textContent = 'Cargando informe...';
+    await updateDateControls();
     let data;
     try {
       data = await ctx.api.get(`/api/informe/${currentDate}`);
     } catch (err) {
       ctx.toast('No se pudo cargar el informe de esta fecha', 'error');
+      reportBox.textContent = 'Error cargando el informe. Intenta nuevamente.';
       return;
     }
     currentData = data;
@@ -276,13 +336,19 @@ export async function mount(container, ctx) {
     ventasList.innerHTML = data.ventas.map(ventaRowHtml).join('');
     ventasEmpty.classList.toggle('hidden', data.ventas.length > 0);
 
+    declinadosList.innerHTML = data.declinados.map(declinadoRowHtml).join('');
+    declinadosEmpty.classList.toggle('hidden', data.declinados.length > 0);
+
     renderReport();
   }
 
   async function persistCanales(fecha, patch) {
     try {
+      setCanalSaveStatus('Guardando...', 'info');
       await ctx.api.put(`/api/informe/${fecha}/canales`, patch);
+      setCanalSaveStatus('Guardado', 'success', 2500);
     } catch (err) {
+      setCanalSaveStatus('Error guardando. Intenta nuevamente.', 'error');
       ctx.toast(err.message, 'error');
     }
   }
@@ -318,6 +384,7 @@ export async function mount(container, ctx) {
     currentData.canales = readCanalesValues();
     canalTotal.textContent = currentData.canales.whatsapp + currentData.canales.correo + currentData.canales.llamadas;
     renderReport();
+    setCanalSaveStatus('Preparado para guardar...', 'info');
     scheduleCanalesSave(currentData.canales);
   }
 
@@ -326,8 +393,13 @@ export async function mount(container, ctx) {
     input.addEventListener('change', () => {
       if (pendingCanalesSave) clearTimeout(pendingCanalesSave.timeoutId);
       pendingCanalesSave = null;
+      setCanalSaveStatus('Guardando...', 'info');
       persistCanales(currentDate, readCanalesValues());
     });
+  });
+
+  container.querySelector('#btn-quick-sale').addEventListener('click', () => {
+    openQuickSaleModal(ctx, () => load());
   });
 
   container.querySelector('#btn-copy').addEventListener('click', () => {
@@ -339,15 +411,19 @@ export async function mount(container, ctx) {
   });
 
   function switchDate(newDate) {
+    const targetDate = clampToToday(newDate);
     flushPendingCanalesSave();
-    currentDate = newDate;
+    currentDate = targetDate;
     load();
   }
 
   container.querySelector('#btn-prev').addEventListener('click', () => switchDate(addDays(currentDate, -1)));
   container.querySelector('#btn-next').addEventListener('click', () => switchDate(addDays(currentDate, 1)));
   container.querySelector('#btn-today').addEventListener('click', () => switchDate(todayStr()));
-  dateInput.addEventListener('change', () => switchDate(dateInput.value));
+  dateInput.addEventListener('change', () => {
+    if (!dateInput.value) return;
+    switchDate(dateInput.value);
+  });
 
   // Los datos por asesor y las ventas son en vivo: cualquier cambio en Ventas
   // (marcar contactado/cotizado/cerrar, incluso con fecha atrasada) refresca

@@ -3,8 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta content="width=device-width, initial-scale=1.0" name="viewport" />
-<title>SalesForce CRM</title>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet" />
+<title>Nova CRM</title>
 <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet" />
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
@@ -91,13 +90,13 @@
           'margin-mobile': '16px',
         },
         fontFamily: {
-          'headline-lg': ['Inter'],
-          'headline-md': ['Inter'],
-          'headline-sm': ['Inter'],
-          'body-sm': ['Inter'],
-          'label-bold': ['Inter'],
-          'body-md': ['Inter'],
-          'display-kpi': ['Inter'],
+          'headline-lg': ['Inter', 'system-ui', 'sans-serif'],
+          'headline-md': ['Inter', 'system-ui', 'sans-serif'],
+          'headline-sm': ['Inter', 'system-ui', 'sans-serif'],
+          'body-sm': ['Inter', 'system-ui', 'sans-serif'],
+          'label-bold': ['Inter', 'system-ui', 'sans-serif'],
+          'body-md': ['Inter', 'system-ui', 'sans-serif'],
+          'display-kpi': ['Inter', 'system-ui', 'sans-serif'],
         },
         fontSize: {
           'headline-lg': ['30px', { lineHeight: '38px', fontWeight: '600' }],
@@ -123,8 +122,8 @@
       <span class="material-symbols-outlined icon-fill text-[22px]">bolt</span>
     </div>
     <div class="min-w-0">
-      <h1 class="text-headline-sm font-headline-sm font-extrabold text-on-surface leading-tight truncate">SalesForce CRM</h1>
-      <p class="text-body-sm font-body-sm text-on-surface-variant truncate">Ventas Alta Velocidad</p>
+      <h1 class="text-headline-sm font-headline-sm font-extrabold text-on-surface leading-tight truncate">Nova CRM</h1>
+      <p class="text-body-sm font-body-sm text-on-surface-variant truncate">Gestión Comercial Operativa</p>
     </div>
   </div>
   <ul id="nav-list" class="flex-1 overflow-y-auto py-2 px-3 space-y-0.5">
@@ -146,10 +145,16 @@
       </details>
     </li>
 
+    <li><a data-route="clientes" href="#/clientes" class="nav-link flex items-center gap-3 px-3 py-2.5 rounded-lg text-on-surface-variant hover:bg-surface-container-low transition-colors">
+      <span class="material-symbols-outlined text-[20px]">contacts</span><span class="text-label-bold font-label-bold">Clientes</span></a></li>
     <li><a data-route="informe" href="#/informe" class="nav-link flex items-center gap-3 px-3 py-2.5 rounded-lg text-on-surface-variant hover:bg-surface-container-low transition-colors">
       <span class="material-symbols-outlined text-[20px]">summarize</span><span class="text-label-bold font-label-bold">Informe</span></a></li>
+    <li><a data-route="ventas-cerradas" href="#/ventas-cerradas" class="nav-link flex items-center gap-3 px-3 py-2.5 rounded-lg text-on-surface-variant hover:bg-surface-container-low transition-colors">
+      <span class="material-symbols-outlined text-[20px]">paid</span><span class="text-label-bold font-label-bold">Ventas Cerradas</span></a></li>
     <li><a data-route="estadisticas" href="#/estadisticas" class="nav-link flex items-center gap-3 px-3 py-2.5 rounded-lg text-on-surface-variant hover:bg-surface-container-low transition-colors">
       <span class="material-symbols-outlined text-[20px]">leaderboard</span><span class="text-label-bold font-label-bold">Estadísticas</span></a></li>
+    <li><a data-route="ia" href="#/ia" class="nav-link flex items-center gap-3 px-3 py-2.5 rounded-lg text-on-surface-variant hover:bg-surface-container-low transition-colors">
+      <span class="material-symbols-outlined text-[20px]">auto_graph</span><span class="text-label-bold font-label-bold">Predicción IA</span></a></li>
     <li><a data-route="asesores" href="#/asesores" class="nav-link flex items-center gap-3 px-3 py-2.5 rounded-lg text-on-surface-variant hover:bg-surface-container-low transition-colors">
       <span class="material-symbols-outlined text-[20px]">group</span><span class="text-label-bold font-label-bold">Asesores</span></a></li>
     <li><a data-route="ajustes" href="#/ajustes" class="nav-link flex items-center gap-3 px-3 py-2.5 rounded-lg text-on-surface-variant hover:bg-surface-container-low transition-colors">
@@ -167,7 +172,7 @@
 <!-- Main column -->
 <div id="main-col" class="flex-1 ml-[240px] flex flex-col min-h-screen">
   <header id="topbar" class="flex justify-between items-center w-full h-16 px-margin-desktop sticky top-0 z-30 bg-surface border-b border-outline-variant">
-    <h2 id="page-title" class="text-headline-sm font-headline-sm font-bold text-on-surface">CRM Operativo</h2>
+    <h2 id="page-title" class="text-headline-sm font-headline-sm font-bold text-on-surface">Nova CRM</h2>
     <div class="flex items-center gap-4">
       <div class="relative hidden md:block">
         <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant text-[20px]">search</span>

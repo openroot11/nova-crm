@@ -12,9 +12,12 @@
     "start": "node index.js"
   },
   "dependencies": {
+    "dotenv": "^17.4.2",
     "express": "^4.19.2",
+    "express-async-errors": "^3.1.1",
     "express-session": "^1.18.1",
     "node-cron": "^3.0.3",
+    "pg": "^8.23.0",
     "ws": "^8.18.0",
     "xlsx": "^0.18.5"
   }

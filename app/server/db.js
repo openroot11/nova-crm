@@ -1,70 +1,212 @@
-const path = require('path');
-const fs = require('fs');
-const { DatabaseSync } = require('node:sqlite');
+require('dotenv').config();
+const { Pool, types } = require('pg');
+const { AsyncLocalStorage } = require('async_hooks');
 
-const DATA_DIR = path.join(__dirname, 'data');
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+if (!process.env.DATABASE_URL) {
+  throw new Error('Falta DATABASE_URL en .env (cadena de conexion a Postgres de Supabase)');
+}
 
-const db = new DatabaseSync(path.join(DATA_DIR, 'nova_crm.db'));
-db.exec('PRAGMA journal_mode = WAL');
-db.exec('PRAGMA foreign_keys = ON');
+// COUNT(*)/SUM(entero) en Postgres devuelven bigint (OID 20), que "pg" por
+// defecto entrega como string (para no perder precision con numeros
+// enormes). Aqui nunca se acerca a ese limite, y el resto del backend hace
+// aritmetica directa sobre esos valores (sumas, divisiones) asumiendo que
+// son numeros JS -- sin esto, cosas como "totales.asignados += fila.c"
+// concatenarian strings en vez de sumar.
+types.setTypeParser(20, (val) => parseInt(val, 10));
 
-// node:sqlite no trae un helper de transacciones como better-sqlite3;
-// se agrega uno con la misma firma (db.transaction(fn) -> fn ejecutable)
-// para que el resto del backend pueda usarlo igual.
-db.transaction = function transaction(fn) {
-  return function runTransaction(...args) {
-    db.exec('BEGIN');
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.DATABASE_URL.includes('localhost') ? false : { rejectUnauthorized: false },
+});
+pool.on('error', (err) => console.error('Error inesperado en el pool de Postgres:', err));
+
+// Permite que codigo dentro de db.transaction(fn) seguir usando el mismo
+// db.prepare(...).run()/.get()/.all() de siempre, pero que esas consultas
+// viajen por la MISMA conexion que abrio BEGIN (necesario para que la
+// transaccion realmente las agrupe) en vez de una conexion cualquiera del
+// pool -- sin esto, reasignar un lead o el factory-reset podrian quedar a
+// medias si algo falla a mitad de camino.
+const txStorage = new AsyncLocalStorage();
+
+async function query(sql, params) {
+  const client = txStorage.getStore();
+  return client ? client.query(sql, params) : pool.query(sql, params);
+}
+
+async function exec(sql) {
+  // Sin segundo argumento: protocolo "simple" de Postgres, el unico que
+  // acepta varias sentencias separadas por ";" en un solo string (lo usa el
+  // schema de abajo). db.prepare(...).get/all/run() SIEMPRE pasan un
+  // arreglo de parametros (aunque este vacio) para ir por el protocolo
+  // parametrizado -- por diseno, nunca deben ejecutar mas de una sentencia.
+  const client = txStorage.getStore();
+  return client ? client.query(sql) : pool.query(sql);
+}
+
+// node:sqlite (y better-sqlite3) usan "?" posicional; aqui se traduce a
+// $1,$2,... de Postgres sin tocar los ~147 SELECT/INSERT/UPDATE/DELETE ya
+// escritos en el resto del backend.
+function toPgSql(sql) {
+  let i = 0;
+  return sql.replace(/\?/g, () => `$${++i}`);
+}
+
+// Tablas sin columna "id" (su PK es otra) -- ver RETURNING mas abajo.
+const NO_ID_TABLES = new Set(['settings', 'informe_canales', 'informe_stats']);
+
+function insertTargetTable(sql) {
+  const m = /^\s*insert\s+into\s+["']?(\w+)/i.exec(sql);
+  return m ? m[1].toLowerCase() : null;
+}
+
+/**
+ * Shim de compatibilidad: misma forma que node:sqlite's DatabaseSync
+ * (db.prepare(sql).get/all/run(...params)), pero async por dentro (Postgres
+ * vive en la red, no puede ser sincrono). Como node:sqlite es sincrono, el
+ * resto del backend hoy llama estos metodos SIN await -- pasar a Postgres
+ * obliga a agregar async/await en cada sitio que los usa, pero el SQL en si
+ * (con "?") no se toca.
+ *
+ * .run() en un INSERT sin RETURNING propio le agrega "RETURNING id" solo y
+ * expone el resultado como { lastInsertRowid }, para que el patron ya usado
+ * en 8 sitios del backend ("INSERT..." + info.lastInsertRowid) siga
+ * funcionando sin cambios en quien lo llama.
+ */
+function prepare(sql) {
+  const trimmed = sql.trim();
+  const pgSql = toPgSql(trimmed);
+  const table = insertTargetTable(trimmed);
+  const isInsert = table !== null;
+  const alreadyReturning = /returning/i.test(trimmed);
+  const autoReturning = isInsert && !alreadyReturning && !NO_ID_TABLES.has(table);
+  const runSql = autoReturning ? `${pgSql} RETURNING id` : pgSql;
+
+  return {
+    async get(...params) {
+      const res = await query(pgSql, params);
+      return res.rows[0];
+    },
+    async all(...params) {
+      const res = await query(pgSql, params);
+      return res.rows;
+    },
+    async run(...params) {
+      const res = await query(runSql, params);
+      return {
+        changes: res.rowCount,
+        lastInsertRowid: autoReturning ? res.rows[0]?.id : undefined,
+      };
+    },
+  };
+}
+
+// Misma firma que antes (db.transaction(fn) -> fn ejecutable), pero ahora
+// async: reserva una sola conexion del pool para todo BEGIN/COMMIT/ROLLBACK,
+// y la deja disponible (via AsyncLocalStorage) para que cualquier
+// db.prepare(...).run() que corra dentro de fn() la reuse automaticamente.
+function transaction(fn) {
+  return async function runTransaction(...args) {
+    const client = await pool.connect();
     try {
-      const result = fn(...args);
-      db.exec('COMMIT');
+      await client.query('BEGIN');
+      const result = await txStorage.run(client, () => fn(...args));
+      await client.query('COMMIT');
       return result;
     } catch (err) {
-      db.exec('ROLLBACK');
+      try {
+        await client.query('ROLLBACK');
+      } catch {
+        /* si el rollback tambien falla, se propaga el error original */
+      }
       throw err;
+    } finally {
+      client.release();
     }
   };
-};
+}
 
-db.exec(`
+const db = { prepare, exec, transaction };
+
+async function getSetting(key, fallback = null) {
+  const row = await db.prepare('SELECT value FROM settings WHERE key = ?').get(key);
+  return row ? row.value : fallback;
+}
+
+async function setSetting(key, value) {
+  await db
+    .prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
+    .run(key, String(value));
+}
+
+// Los 3 asesores reales del negocio.
+const DEFAULT_ADVISORS = [
+  { name: 'Harol', role: 'Asesor Comercial' },
+  { name: 'Oscar', role: 'Asesor Comercial' },
+  { name: 'Roberto', role: 'Asesor Comercial' },
+];
+
+// Formato identico al "datetime('now')" que usaba SQLite: texto UTC
+// 'YYYY-MM-DD HH:MM:SS', sin sufijo de zona horaria -- el resto del backend
+// (sla.js, routes/leads.js) ya sabe parsear exactamente ese formato, asi que
+// se preserva tal cual en vez de migrar estas columnas a timestamptz nativo
+// (eso tocaria logica de negocio, fuera del alcance de "solo la base de
+// datos" de esta migracion).
+const SCHEMA_SQL = `
+CREATE OR REPLACE FUNCTION now_utc_text() RETURNS TEXT AS $$
+  SELECT to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS');
+$$ LANGUAGE SQL STABLE;
+
 CREATE TABLE IF NOT EXISTS advisors (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   name TEXT NOT NULL,
   role TEXT DEFAULT 'Asesor Comercial',
-  active INTEGER NOT NULL DEFAULT 1,
-  is_group INTEGER NOT NULL DEFAULT 0,
+  active BOOLEAN NOT NULL DEFAULT true,
+  is_group BOOLEAN NOT NULL DEFAULT false,
   priority_order INTEGER NOT NULL,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT now_utc_text()
+);
+
+CREATE TABLE IF NOT EXISTS clients (
+  id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  name TEXT NOT NULL,
+  phone TEXT,
+  document TEXT,
+  notes TEXT,
+  created_at TEXT NOT NULL DEFAULT now_utc_text()
 );
 
 CREATE TABLE IF NOT EXISTS leads (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   client_name TEXT NOT NULL,
   phone TEXT,
   document TEXT,
   product TEXT,
   notes TEXT,
   status TEXT NOT NULL DEFAULT 'asignado',
-  assigned_advisor_id INTEGER,
+  assigned_advisor_id INTEGER REFERENCES advisors(id),
   amount REAL DEFAULT 0,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  created_at TEXT NOT NULL DEFAULT now_utc_text(),
   contacted_at TEXT,
   closed_at TEXT,
   reassigned_count INTEGER NOT NULL DEFAULT 0,
-  FOREIGN KEY (assigned_advisor_id) REFERENCES advisors(id)
+  source TEXT DEFAULT 'WhatsApp',
+  quoted_at TEXT,
+  channel_detail TEXT,
+  last_followup_at TEXT,
+  followup_count INTEGER NOT NULL DEFAULT 0,
+  city TEXT,
+  is_historical BOOLEAN NOT NULL DEFAULT false,
+  client_id INTEGER REFERENCES clients(id)
 );
 
 CREATE TABLE IF NOT EXISTS reassignments (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  lead_id INTEGER NOT NULL,
-  from_advisor_id INTEGER,
-  to_advisor_id INTEGER,
+  id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  lead_id INTEGER NOT NULL REFERENCES leads(id),
+  from_advisor_id INTEGER REFERENCES advisors(id),
+  to_advisor_id INTEGER REFERENCES advisors(id),
   reason TEXT,
   penalty_points INTEGER NOT NULL DEFAULT 5,
-  at TEXT NOT NULL DEFAULT (datetime('now')),
-  FOREIGN KEY (lead_id) REFERENCES leads(id),
-  FOREIGN KEY (from_advisor_id) REFERENCES advisors(id),
-  FOREIGN KEY (to_advisor_id) REFERENCES advisors(id)
+  at TEXT NOT NULL DEFAULT now_utc_text()
 );
 
 CREATE TABLE IF NOT EXISTS settings (
@@ -74,23 +216,21 @@ CREATE TABLE IF NOT EXISTS settings (
 
 CREATE TABLE IF NOT EXISTS informe_stats (
   fecha TEXT NOT NULL,
-  advisor_id INTEGER NOT NULL,
+  advisor_id INTEGER NOT NULL REFERENCES advisors(id),
   asignados INTEGER NOT NULL DEFAULT 0,
   contactados INTEGER NOT NULL DEFAULT 0,
   cotizados INTEGER NOT NULL DEFAULT 0,
   pendientes INTEGER NOT NULL DEFAULT 0,
-  PRIMARY KEY (fecha, advisor_id),
-  FOREIGN KEY (advisor_id) REFERENCES advisors(id)
+  PRIMARY KEY (fecha, advisor_id)
 );
 
 CREATE TABLE IF NOT EXISTS informe_ventas (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   fecha TEXT NOT NULL,
-  advisor_id INTEGER NOT NULL,
+  advisor_id INTEGER NOT NULL REFERENCES advisors(id),
   cliente TEXT,
   monto REAL NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  FOREIGN KEY (advisor_id) REFERENCES advisors(id)
+  created_at TEXT NOT NULL DEFAULT now_utc_text()
 );
 
 CREATE TABLE IF NOT EXISTS informe_canales (
@@ -101,194 +241,63 @@ CREATE TABLE IF NOT EXISTS informe_canales (
 );
 
 CREATE TABLE IF NOT EXISTS users (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   username TEXT NOT NULL UNIQUE,
   password_hash TEXT NOT NULL,
   role TEXT NOT NULL DEFAULT 'asesor' CHECK (role IN ('admin', 'coordinador', 'asesor')),
-  advisor_id INTEGER,
-  active INTEGER NOT NULL DEFAULT 1,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  FOREIGN KEY (advisor_id) REFERENCES advisors(id)
+  advisor_id INTEGER REFERENCES advisors(id),
+  active BOOLEAN NOT NULL DEFAULT true,
+  created_at TEXT NOT NULL DEFAULT now_utc_text()
 );
 
 CREATE TABLE IF NOT EXISTS ad_spend (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   month TEXT NOT NULL UNIQUE,
   amount REAL NOT NULL DEFAULT 0,
-  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  updated_at TEXT NOT NULL DEFAULT now_utc_text()
 );
 
 CREATE TABLE IF NOT EXISTS reports (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   type TEXT NOT NULL CHECK (type IN ('rendimiento', 'rentabilidad', 'asesor')),
   period_from TEXT NOT NULL,
   period_to TEXT NOT NULL,
-  advisor_id INTEGER,
-  generated_by INTEGER,
-  generated_at TEXT NOT NULL DEFAULT (datetime('now')),
-  data TEXT NOT NULL,
-  FOREIGN KEY (generated_by) REFERENCES users(id),
-  FOREIGN KEY (advisor_id) REFERENCES advisors(id)
+  advisor_id INTEGER REFERENCES advisors(id),
+  generated_by INTEGER REFERENCES users(id),
+  generated_at TEXT NOT NULL DEFAULT now_utc_text(),
+  data TEXT NOT NULL
 );
-`);
 
-function getSetting(key, fallback = null) {
-  const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key);
-  return row ? row.value : fallback;
-}
+CREATE TABLE IF NOT EXISTS payments (
+  id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  lead_id INTEGER NOT NULL REFERENCES leads(id),
+  amount REAL NOT NULL,
+  paid_at TEXT NOT NULL,
+  notes TEXT,
+  registered_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT now_utc_text()
+);
+`;
 
-function setSetting(key, value) {
-  db.prepare(
-    'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
-  ).run(key, String(value));
-}
+async function seedIfEmpty() {
+  const row = await db.prepare('SELECT COUNT(*) AS c FROM advisors').get();
+  if (row.c > 0) return;
 
-// Los 3 asesores reales del negocio (el seed original traia 4, incluyendo un
-// "Jose" que nunca existio y un "Harold" mal escrito - ver migracion abajo).
-const DEFAULT_ADVISORS = [
-  { name: 'Harol', role: 'Asesor Comercial' },
-  { name: 'Oscar', role: 'Asesor Comercial' },
-  { name: 'Roberto', role: 'Asesor Comercial' },
-];
-
-/**
- * Agrega una columna a una tabla existente solo si todavia no existe.
- * Necesario porque hay datos reales en producción y no se puede recrear
- * la tabla con DROP/CREATE.
- */
-function ensureColumn(table, column, ddl) {
-  const columns = db.prepare(`PRAGMA table_info(${table})`).all();
-  const exists = columns.some((c) => c.name === column);
-  if (!exists) {
-    db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+  const insert = db.prepare('INSERT INTO advisors (name, role, active, is_group, priority_order) VALUES (?, ?, true, false, ?)');
+  for (let idx = 0; idx < DEFAULT_ADVISORS.length; idx++) {
+    const a = DEFAULT_ADVISORS[idx];
+    await insert.run(a.name, a.role, idx + 1);
   }
+
+  await setSetting('auto_backup_weekly', 'true');
+  await setSetting('last_backup_at', '');
 }
 
-ensureColumn('leads', 'source', "source TEXT DEFAULT 'WhatsApp'");
-ensureColumn('leads', 'quoted_at', 'quoted_at TEXT');
-// Origen pagado/organico del lead (Google Ads, Organico, Referido, Otro),
-// independiente del canal (source). Se separa de "source" porque ese campo
-// ya se simplifico para el informe diario (ver migrateSourceV2) y no debe
-// volver a mezclarse; este es el dato que necesita el reporte de
-// rentabilidad de leads (costo por lead / ROI de Google Ads).
-ensureColumn('leads', 'channel_detail', 'channel_detail TEXT');
-// Seguimiento post-cotizacion (ver followup.js): cada vez que alguien
-// insiste con el cliente sobre una cotizacion enviada, se registra aqui.
-ensureColumn('leads', 'last_followup_at', 'last_followup_at TEXT');
-ensureColumn('leads', 'followup_count', 'followup_count INTEGER NOT NULL DEFAULT 0');
-// Ciudad de origen del lead (para el mapa de Colombia en el Dashboard). Se
-// guarda como texto libre pero el formulario solo ofrece ciudades de una
-// lista fija (ver public/js/colombia-cities.js) para que coincida con las
-// coordenadas que usa el mapa.
-ensureColumn('leads', 'city', 'city TEXT');
-
-// Migracion unica: el canal de entrada se simplifica a las 3 categorias que
-// usa el informe diario real (WhatsApp/Correo/Llamada) en vez de variantes
-// como "WhatsApp - Google Ads"/"WhatsApp - Organico".
-function migrateSourceV2() {
-  if (getSetting('migrated_source_v2') === 'true') return;
-  db.exec("UPDATE leads SET source = 'WhatsApp' WHERE source IN ('WhatsApp - Google Ads', 'WhatsApp - Orgánico') OR source IS NULL");
-  setSetting('migrated_source_v2', 'true');
+// Debe correr (y terminar) una sola vez al arrancar, antes de aceptar
+// peticiones -- ver index.js.
+async function init() {
+  await exec(SCHEMA_SQL);
+  await seedIfEmpty();
 }
 
-// Migracion unica: los estados viejos 'nuevo' y 'en_proceso' pasan a ser
-// 'asignado' bajo el nuevo modelo de embudo (asignado/contactado/cotizado/
-// cerrado_ganado/cerrado_perdido). Guardada con un flag en settings para
-// que nunca se vuelva a ejecutar (idempotente).
-function migrateStatusV2() {
-  if (getSetting('migrated_status_v2') === 'true') return;
-  db.exec("UPDATE leads SET status = 'asignado' WHERE status IN ('nuevo', 'en_proceso')");
-  setSetting('migrated_status_v2', 'true');
-}
-
-// Migracion unica: corrige el seed original de 4 asesores (Oscar, Roberto,
-// Jose, Harold) al roster real de 3 (Harol, Oscar, Roberto). "Harold" se
-// renombra a "Harol" (typo); "Jose" no es un asesor real y se pausa
-// (active=0) en vez de borrarse, para no romper el historial de leads que
-// ya le hayan sido asignados.
-function migrateAdvisorsV2() {
-  if (getSetting('migrated_advisors_v2') === 'true') return;
-  const harold = db.prepare("SELECT id FROM advisors WHERE name = 'Harold'").get();
-  if (harold) {
-    db.prepare("UPDATE advisors SET name = 'Harol' WHERE id = ?").run(harold.id);
-  }
-  const jose = db.prepare("SELECT id FROM advisors WHERE name = 'Jose' AND active = 1").get();
-  if (jose) {
-    db.prepare('UPDATE advisors SET active = 0 WHERE id = ?').run(jose.id);
-  }
-  setSetting('migrated_advisors_v2', 'true');
-}
-
-// Migracion unica: el sistema pasa de una sola clave compartida
-// (settings.admin_password_hash) a cuentas individuales (tabla users). Si ya
-// habia una clave compartida configurada, se crea un usuario 'admin' que la
-// hereda tal cual (mismo hash, mismo formato) para que quien ya la conocia
-// pueda seguir entrando sin quedar bloqueado; desde ahi puede crear las
-// cuentas del resto del equipo en Ajustes -> Usuarios. Si nunca hubo clave
-// (instalacion nueva), no se crea nada y el flujo de "primer uso" de
-// auth.js se encarga de crear el primer usuario admin.
-function migrateUsersV1() {
-  const userCount = db.prepare('SELECT COUNT(*) AS c FROM users').get().c;
-  if (userCount > 0) return;
-  const sharedHash = getSetting('admin_password_hash');
-  if (!sharedHash) return;
-  db.prepare(
-    "INSERT INTO users (username, password_hash, role, active) VALUES ('admin', ?, 'admin', 1)"
-  ).run(sharedHash);
-}
-
-// Migracion unica: la tabla reports se creo originalmente sin advisor_id y
-// con el CHECK de "type" limitado a rendimiento/rentabilidad. SQLite no deja
-// alterar un CHECK existente, asi que se reconstruye la tabla (conservando
-// los datos) para poder archivar tambien fichas individuales por asesor.
-function migrateReportsV2() {
-  if (getSetting('migrated_reports_v2') === 'true') return;
-  const hasAdvisorId = db.prepare("PRAGMA table_info(reports)").all().some((c) => c.name === 'advisor_id');
-  if (!hasAdvisorId) {
-    db.exec(`
-      CREATE TABLE reports_new (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        type TEXT NOT NULL CHECK (type IN ('rendimiento', 'rentabilidad', 'asesor')),
-        period_from TEXT NOT NULL,
-        period_to TEXT NOT NULL,
-        advisor_id INTEGER,
-        generated_by INTEGER,
-        generated_at TEXT NOT NULL DEFAULT (datetime('now')),
-        data TEXT NOT NULL,
-        FOREIGN KEY (generated_by) REFERENCES users(id),
-        FOREIGN KEY (advisor_id) REFERENCES advisors(id)
-      );
-      INSERT INTO reports_new (id, type, period_from, period_to, generated_by, generated_at, data)
-        SELECT id, type, period_from, period_to, generated_by, generated_at, data FROM reports;
-      DROP TABLE reports;
-      ALTER TABLE reports_new RENAME TO reports;
-    `);
-  }
-  setSetting('migrated_reports_v2', 'true');
-}
-
-migrateStatusV2();
-migrateAdvisorsV2();
-migrateSourceV2();
-migrateUsersV1();
-migrateReportsV2();
-
-function seedIfEmpty() {
-  const count = db.prepare('SELECT COUNT(*) AS c FROM advisors').get().c;
-  if (count > 0) return;
-
-  const insert = db.prepare(
-    'INSERT INTO advisors (name, role, active, is_group, priority_order) VALUES (?, ?, 1, 0, ?)'
-  );
-  const seedTx = db.transaction(() => {
-    DEFAULT_ADVISORS.forEach((a, idx) => insert.run(a.name, a.role, idx + 1));
-  });
-  seedTx();
-
-  setSetting('auto_backup_weekly', 'true');
-  setSetting('last_backup_at', '');
-}
-
-seedIfEmpty();
-
-module.exports = { db, getSetting, setSetting, DEFAULT_ADVISORS, ensureColumn };
+module.exports = { db, getSetting, setSetting, DEFAULT_ADVISORS, init, pool };

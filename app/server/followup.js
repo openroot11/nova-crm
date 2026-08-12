@@ -17,6 +17,7 @@ function lastTouch(lead) {
  * (null = no aplica: el lead no esta en estado "cotizado" a la espera de respuesta)
  */
 function followupStatus(lead, toDate = new Date()) {
+  if (lead.is_historical) return null; // historial importado, no cola de tareas de hoy
   if (lead.status !== 'cotizado') return null;
   const touch = lastTouch(lead);
   if (!touch) return null;

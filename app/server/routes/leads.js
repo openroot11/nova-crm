@@ -45,9 +45,52 @@ function parseBackdatedInput(value) {
   return dt.toISOString().replace('T', ' ').slice(0, 19);
 }
 
-function serialize(lead) {
+function predictLeadScore(lead, advisorRate = 0) {
+  if (!lead) return 0;
+  if (lead.status === 'cerrado_ganado') return 100;
+  if (lead.status === 'cerrado_perdido') return 5;
+
+  let score = 20;
+  if (lead.status === 'contactado') score = 45;
+  else if (lead.status === 'cotizado') score = 70;
+  else if (lead.status === 'asignado') score = 30;
+
+  const sourceBonus = {
+    WhatsApp: 8,
+    Correo: 6,
+    Llamada: 10,
+    Orgánico: 9,
+    Referido: 12,
+    Otro: 4,
+  };
+  score += sourceBonus[lead.source] || 0;
+
+  if (lead.product === 'Carpas') score += 5;
+  if (lead.product === 'Gramas') score += 3;
+  if (lead.product === 'Baby Gym') score += 4;
+
+  if (lead.followup_count >= 2) score += 6;
+  if (lead.reassigned_count > 0) score -= Math.min(10, lead.reassigned_count * 4);
+  if (lead.amount && lead.amount >= 1000000) score += 5;
+
+  if (lead.created_at) {
+    const created = new Date(lead.created_at.replace(' ', 'T') + 'Z');
+    const ageDays = Math.max(0, Math.floor((Date.now() - created.getTime()) / 86400000));
+    if (ageDays <= 2 && lead.status === 'asignado') score += 8;
+    if (ageDays > 7 && lead.status === 'asignado') score -= 8;
+    if (ageDays > 14 && lead.status === 'contactado') score -= 4;
+  }
+
+  score += Math.round(Math.max(0, Math.min(1, advisorRate)) * 20);
+  score = Math.round(score);
+  if (score < 5) score = 5;
+  if (score > 95) score = 95;
+  return score;
+}
+
+async function serialize(lead, advisorRate = 0) {
   const advisor = lead.assigned_advisor_id
-    ? db.prepare('SELECT id, name, is_group FROM advisors WHERE id = ?').get(lead.assigned_advisor_id)
+    ? await db.prepare('SELECT id, name, is_group FROM advisors WHERE id = ?').get(lead.assigned_advisor_id)
     : null;
   return {
     ...lead,
@@ -59,11 +102,12 @@ function serialize(lead) {
     remaining_label: lead.status.startsWith('cerrado') ? null : sla.remainingLabel(lead),
     followup_status: followup.followupStatus(lead),
     followup_elapsed_label: followup.followupElapsedLabel(lead),
+    predicted_score: predictLeadScore(lead, advisorRate),
   };
 }
 
-router.get('/', (req, res) => {
-  const { status, critical_only, followup_only, advisor_id, product, source, channel_detail, city, from, to, q } = req.query;
+router.get('/', async (req, res) => {
+  const { status, critical_only, followup_only, advisor_id, product, source, channel_detail, city, from, to, closed_from, closed_to, q } = req.query;
 
   const conditions = [];
   const params = [];
@@ -115,10 +159,42 @@ router.get('/', (req, res) => {
     conditions.push('created_at <= ?');
     params.push(`${to} 23:59:59`);
   }
+  // Rango sobre closed_at, aparte de from/to (creado): para reportes de
+  // ventas concretadas (Ventas Cerradas) el rango que importa es cuando se
+  // cerro, no cuando entro el lead -- distinto criterio del que ya usan
+  // from/to en Registro Operativo/SLA/Seguimiento (esos si son por creacion).
+  if (closed_from) {
+    conditions.push('closed_at >= ?');
+    params.push(`${closed_from} 00:00:00`);
+  }
+  if (closed_to) {
+    conditions.push('closed_at <= ?');
+    params.push(`${closed_to} 23:59:59`);
+  }
 
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
-  let rows = db.prepare(`SELECT * FROM leads ${where} ORDER BY created_at DESC`).all(...params);
-  let serialized = rows.map(serialize);
+  const advisorStats = await db
+    .prepare(`
+      SELECT assigned_advisor_id,
+             COUNT(*) AS total,
+             SUM(CASE WHEN status = 'cerrado_ganado' THEN 1 ELSE 0 END) AS won
+      FROM leads
+      WHERE assigned_advisor_id IS NOT NULL
+      GROUP BY assigned_advisor_id
+    `)
+    .all();
+  const advisorRates = new Map();
+  let totalWon = 0;
+  let totalLeads = 0;
+  advisorStats.forEach((row) => {
+    advisorRates.set(row.assigned_advisor_id, row.total ? row.won / row.total : 0);
+    totalWon += row.won;
+    totalLeads += row.total;
+  });
+  const avgAdvisorRate = totalLeads ? totalWon / totalLeads : 0.15;
+
+  const rows = await db.prepare(`SELECT * FROM leads ${where} ORDER BY created_at DESC`).all(...params);
+  let serialized = await Promise.all(rows.map((row) => serialize(row, advisorRates.get(row.assigned_advisor_id) ?? avgAdvisorRate)));
   if (critical_only === '1') {
     serialized = serialized.filter((l) => l.sla_status === 'riesgo' || l.sla_status === 'vencido');
   }
@@ -128,22 +204,35 @@ router.get('/', (req, res) => {
   res.json(serialized);
 });
 
-router.get('/:id', (req, res) => {
-  const lead = db.prepare('SELECT * FROM leads WHERE id = ?').get(Number(req.params.id));
+router.get('/:id', async (req, res) => {
+  const lead = await db.prepare('SELECT * FROM leads WHERE id = ?').get(Number(req.params.id));
   if (!lead) return res.status(404).json({ error: 'Lead no encontrado' });
   if (!canOperateOn(req.user, lead)) return res.status(403).json({ error: 'No tienes permiso para ver este lead' });
-  res.json(serialize(lead));
+  const advisorStat = lead.assigned_advisor_id
+    ? await db
+        .prepare(
+          `SELECT COUNT(*) AS total, SUM(CASE WHEN status = 'cerrado_ganado' THEN 1 ELSE 0 END) AS won FROM leads WHERE assigned_advisor_id = ?`
+        )
+        .get(lead.assigned_advisor_id)
+    : null;
+  const advisorRate = advisorStat && advisorStat.total ? advisorStat.won / advisorStat.total : 0.15;
+  res.json(await serialize(lead, advisorRate));
 });
 
 const DEFAULT_SOURCE = 'WhatsApp';
 const DEFAULT_CHANNEL_DETAIL = 'Google Ads';
 
-router.post('/', requireRole('coordinador', 'admin'), (req, res) => {
-  const { client_name, phone, document, product, notes, advisor_id, source, channel_detail, city, created_at } = req.body || {};
+router.post('/', requireRole('coordinador', 'admin'), async (req, res) => {
+  const { client_name, phone, document, product, notes, advisor_id, source, channel_detail, city, created_at, client_id } = req.body || {};
   if (!client_name || !client_name.trim()) return res.status(400).json({ error: 'client_name es requerido' });
   if (!phone || !phone.trim()) return res.status(400).json({ error: 'phone es requerido' });
-  const advisor = db.prepare('SELECT * FROM advisors WHERE id = ? AND active = 1').get(Number(advisor_id));
+  const advisor = await db.prepare('SELECT * FROM advisors WHERE id = ? AND active = true').get(Number(advisor_id));
   if (!advisor) return res.status(400).json({ error: 'Selecciona un asesor activo para asignar el lead' });
+  let client = null;
+  if (client_id) {
+    client = await db.prepare('SELECT * FROM clients WHERE id = ?').get(Number(client_id));
+    if (!client) return res.status(400).json({ error: 'Cliente invalido' });
+  }
 
   let now;
   try {
@@ -151,10 +240,10 @@ router.post('/', requireRole('coordinador', 'admin'), (req, res) => {
   } catch (err) {
     return res.status(400).json({ error: err.message });
   }
-  const info = db
+  const info = await db
     .prepare(
-      `INSERT INTO leads (client_name, phone, document, product, notes, status, assigned_advisor_id, source, channel_detail, city, created_at)
-       VALUES (?, ?, ?, ?, ?, 'asignado', ?, ?, ?, ?, ?)`
+      `INSERT INTO leads (client_name, phone, document, product, notes, status, assigned_advisor_id, source, channel_detail, city, created_at, client_id)
+       VALUES (?, ?, ?, ?, ?, 'asignado', ?, ?, ?, ?, ?, ?)`
     )
     .run(
       client_name.trim(),
@@ -166,31 +255,32 @@ router.post('/', requireRole('coordinador', 'admin'), (req, res) => {
       (source && source.trim()) || DEFAULT_SOURCE,
       (channel_detail && channel_detail.trim()) || DEFAULT_CHANNEL_DETAIL,
       (city && city.trim()) || null,
-      now
+      now,
+      client ? client.id : null
     );
 
-  const lead = db.prepare('SELECT * FROM leads WHERE id = ?').get(info.lastInsertRowid);
+  const lead = await db.prepare('SELECT * FROM leads WHERE id = ?').get(info.lastInsertRowid);
   broadcast('leads_changed', { reason: 'created', id: lead.id });
-  res.status(201).json(serialize(lead));
+  res.status(201).json(await serialize(lead));
 });
 
-router.post('/:id/assign', requireRole('coordinador', 'admin'), (req, res) => {
+router.post('/:id/assign', requireRole('coordinador', 'admin'), async (req, res) => {
   const id = Number(req.params.id);
-  const lead = db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
+  const lead = await db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
   if (!lead) return res.status(404).json({ error: 'Lead no encontrado' });
   const { advisor_id } = req.body || {};
-  const advisor = db.prepare('SELECT * FROM advisors WHERE id = ?').get(Number(advisor_id));
+  const advisor = await db.prepare('SELECT * FROM advisors WHERE id = ?').get(Number(advisor_id));
   if (!advisor) return res.status(400).json({ error: 'Asesor invalido' });
 
-  db.prepare("UPDATE leads SET assigned_advisor_id = ?, status = 'asignado' WHERE id = ?").run(advisor.id, id);
+  await db.prepare("UPDATE leads SET assigned_advisor_id = ?, status = 'asignado' WHERE id = ?").run(advisor.id, id);
 
   broadcast('leads_changed', { reason: 'assigned', id });
-  res.json(serialize(db.prepare('SELECT * FROM leads WHERE id = ?').get(id)));
+  res.json(await serialize(await db.prepare('SELECT * FROM leads WHERE id = ?').get(id)));
 });
 
-router.patch('/:id/contact', (req, res) => {
+router.patch('/:id/contact', async (req, res) => {
   const id = Number(req.params.id);
-  const lead = db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
+  const lead = await db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
   if (!lead) return res.status(404).json({ error: 'Lead no encontrado' });
   if (!canOperateOn(req.user, lead)) return res.status(403).json({ error: 'No tienes permiso sobre este lead' });
   if (lead.status !== 'asignado') {
@@ -204,16 +294,16 @@ router.patch('/:id/contact', (req, res) => {
     return res.status(400).json({ error: err.message });
   }
   if (now < lead.created_at) return res.status(400).json({ error: 'La fecha no puede ser anterior al registro del lead' });
-  db.prepare("UPDATE leads SET status = 'contactado', contacted_at = ? WHERE id = ?").run(now, id);
+  await db.prepare("UPDATE leads SET status = 'contactado', contacted_at = ? WHERE id = ?").run(now, id);
 
-  const updated = db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
+  const updated = await db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
   broadcast('leads_changed', { reason: 'contacted', id });
-  res.json(serialize(updated));
+  res.json(await serialize(updated));
 });
 
-router.patch('/:id/quote', (req, res) => {
+router.patch('/:id/quote', async (req, res) => {
   const id = Number(req.params.id);
-  const lead = db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
+  const lead = await db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
   if (!lead) return res.status(404).json({ error: 'Lead no encontrado' });
   if (!canOperateOn(req.user, lead)) return res.status(403).json({ error: 'No tienes permiso sobre este lead' });
   if (!['asignado', 'contactado'].includes(lead.status)) {
@@ -227,21 +317,21 @@ router.patch('/:id/quote', (req, res) => {
     return res.status(400).json({ error: err.message });
   }
   if (now < lead.created_at) return res.status(400).json({ error: 'La fecha no puede ser anterior al registro del lead' });
-  db.prepare(
-    "UPDATE leads SET status = 'cotizado', quoted_at = ?, contacted_at = COALESCE(contacted_at, ?) WHERE id = ?"
-  ).run(now, now, id);
+  await db
+    .prepare("UPDATE leads SET status = 'cotizado', quoted_at = ?, contacted_at = COALESCE(contacted_at, ?) WHERE id = ?")
+    .run(now, now, id);
 
-  const updated = db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
+  const updated = await db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
   broadcast('leads_changed', { reason: 'quoted', id });
-  res.json(serialize(updated));
+  res.json(await serialize(updated));
 });
 
 // Registrar que se le dio seguimiento a una cotizacion enviada (se le
 // insistio al cliente). Reinicia el reloj de "leads en riesgo de enfriarse"
 // sin cambiar el estado del embudo.
-router.post('/:id/followup', (req, res) => {
+router.post('/:id/followup', async (req, res) => {
   const id = Number(req.params.id);
-  const lead = db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
+  const lead = await db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
   if (!lead) return res.status(404).json({ error: 'Lead no encontrado' });
   if (!canOperateOn(req.user, lead)) return res.status(403).json({ error: 'No tienes permiso sobre este lead' });
   if (lead.status !== 'cotizado') {
@@ -249,19 +339,19 @@ router.post('/:id/followup', (req, res) => {
   }
 
   const now = new Date().toISOString().replace('T', ' ').slice(0, 19);
-  db.prepare('UPDATE leads SET last_followup_at = ?, followup_count = followup_count + 1 WHERE id = ?').run(now, id);
+  await db.prepare('UPDATE leads SET last_followup_at = ?, followup_count = followup_count + 1 WHERE id = ?').run(now, id);
 
-  const updated = db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
+  const updated = await db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
   broadcast('leads_changed', { reason: 'followup', id });
-  res.json(serialize(updated));
+  res.json(await serialize(updated));
 });
 
-router.post('/:id/reassign', requireRole('coordinador', 'admin'), (req, res) => {
+router.post('/:id/reassign', requireRole('coordinador', 'admin'), async (req, res) => {
   const id = Number(req.params.id);
-  const lead = db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
+  const lead = await db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
   if (!lead) return res.status(404).json({ error: 'Lead no encontrado' });
   const { to_advisor_id, reason, at } = req.body || {};
-  const toAdvisor = db.prepare('SELECT * FROM advisors WHERE id = ?').get(Number(to_advisor_id));
+  const toAdvisor = await db.prepare('SELECT * FROM advisors WHERE id = ?').get(Number(to_advisor_id));
   if (!toAdvisor) return res.status(400).json({ error: 'Asesor destino invalido' });
 
   let when;
@@ -273,27 +363,27 @@ router.post('/:id/reassign', requireRole('coordinador', 'admin'), (req, res) => 
   if (when < lead.created_at) return res.status(400).json({ error: 'La fecha no puede ser anterior al registro del lead' });
 
   const fromAdvisorId = lead.assigned_advisor_id;
-  const tx = db.transaction(() => {
+  const tx = db.transaction(async () => {
     // No se toca status/contacted_at/quoted_at: una reasignacion es solo un
     // cambio de dueño del lead, el progreso del embudo (contactado/cotizado)
     // ya alcanzado se conserva para el nuevo asesor.
-    db.prepare(
-      'UPDATE leads SET assigned_advisor_id = ?, reassigned_count = reassigned_count + 1 WHERE id = ?'
-    ).run(toAdvisor.id, id);
-    db.prepare(
-      'INSERT INTO reassignments (lead_id, from_advisor_id, to_advisor_id, reason, penalty_points, at) VALUES (?, ?, ?, ?, ?, ?)'
-    ).run(id, fromAdvisorId, toAdvisor.id, reason || 'Reasignacion manual', 5, when);
+    await db
+      .prepare('UPDATE leads SET assigned_advisor_id = ?, reassigned_count = reassigned_count + 1 WHERE id = ?')
+      .run(toAdvisor.id, id);
+    await db
+      .prepare('INSERT INTO reassignments (lead_id, from_advisor_id, to_advisor_id, reason, penalty_points, at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(id, fromAdvisorId, toAdvisor.id, reason || 'Reasignacion manual', 5, when);
   });
-  tx();
+  await tx();
 
   broadcast('leads_changed', { reason: 'reassigned', id });
   broadcast('advisors_changed', { reason: 'penalty', id: fromAdvisorId });
-  res.json(serialize(db.prepare('SELECT * FROM leads WHERE id = ?').get(id)));
+  res.json(await serialize(await db.prepare('SELECT * FROM leads WHERE id = ?').get(id)));
 });
 
-router.post('/:id/close', (req, res) => {
+router.post('/:id/close', async (req, res) => {
   const id = Number(req.params.id);
-  const lead = db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
+  const lead = await db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
   if (!lead) return res.status(404).json({ error: 'Lead no encontrado' });
   if (!canOperateOn(req.user, lead)) return res.status(403).json({ error: 'No tienes permiso sobre este lead' });
   const { result, amount, at } = req.body || {};
@@ -309,14 +399,16 @@ router.post('/:id/close', (req, res) => {
     return res.status(400).json({ error: err.message });
   }
   if (now < lead.created_at) return res.status(400).json({ error: 'La fecha no puede ser anterior al registro del lead' });
-  db.prepare('UPDATE leads SET status = ?, closed_at = ?, amount = ? WHERE id = ?').run(
-    result === 'ganado' ? 'cerrado_ganado' : 'cerrado_perdido',
-    now,
-    result === 'ganado' ? Number(amount) || 0 : 0,
-    id
-  );
+  await db
+    .prepare('UPDATE leads SET status = ?, closed_at = ?, amount = ? WHERE id = ?')
+    .run(
+      result === 'ganado' ? 'cerrado_ganado' : 'cerrado_perdido',
+      now,
+      result === 'ganado' ? Number(amount) || 0 : 0,
+      id
+    );
 
-  const closedLead = db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
+  const closedLead = await db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
   broadcast('leads_changed', { reason: 'closed', id });
   if (result === 'ganado') {
     broadcast('sale_closed', {
@@ -326,7 +418,45 @@ router.post('/:id/close', (req, res) => {
       advisor_id: closedLead.assigned_advisor_id,
     });
   }
-  res.json(serialize(closedLead));
+  res.json(await serialize(closedLead));
+});
+
+// --- Abonos (pagos parciales) -------------------------------------------
+// Se registran contra un pedido/lead especifico (asi se sabe a que venta
+// corresponde cada pago); la ficha del cliente (ver routes/clients.js) los
+// agrega de todos sus pedidos para mostrar el saldo pendiente.
+
+router.get('/:id/payments', async (req, res) => {
+  const id = Number(req.params.id);
+  const lead = await db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
+  if (!lead) return res.status(404).json({ error: 'Lead no encontrado' });
+  if (!canOperateOn(req.user, lead)) return res.status(403).json({ error: 'No tienes permiso sobre este lead' });
+  const payments = await db.prepare('SELECT * FROM payments WHERE lead_id = ? ORDER BY paid_at DESC').all(id);
+  res.json(payments);
+});
+
+router.post('/:id/payments', async (req, res) => {
+  const id = Number(req.params.id);
+  const lead = await db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
+  if (!lead) return res.status(404).json({ error: 'Lead no encontrado' });
+  if (!canOperateOn(req.user, lead)) return res.status(403).json({ error: 'No tienes permiso sobre este lead' });
+  const { amount, notes } = req.body || {};
+  const amountNum = Number(amount);
+  if (!amountNum || amountNum <= 0) return res.status(400).json({ error: 'amount debe ser mayor a 0' });
+
+  let paidAt;
+  try {
+    paidAt = parseBackdatedInput((req.body || {}).paid_at) || nowUtc();
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
+  }
+  const info = await db
+    .prepare('INSERT INTO payments (lead_id, amount, paid_at, notes, registered_by) VALUES (?, ?, ?, ?, ?)')
+    .run(id, amountNum, paidAt, (notes && notes.trim()) || null, req.user.id || null);
+
+  const payment = await db.prepare('SELECT * FROM payments WHERE id = ?').get(info.lastInsertRowid);
+  broadcast('leads_changed', { reason: 'payment_registered', id });
+  res.status(201).json(payment);
 });
 
 module.exports = router;

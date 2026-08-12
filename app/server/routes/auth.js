@@ -5,8 +5,8 @@ const { resolveUser, AUTH_DISABLED } = require('../middleware/auth');
 
 const router = express.Router();
 
-function serializeUser(user) {
-  const advisor = user.advisor_id ? db.prepare('SELECT name FROM advisors WHERE id = ?').get(user.advisor_id) : null;
+async function serializeUser(user) {
+  const advisor = user.advisor_id ? await db.prepare('SELECT name FROM advisors WHERE id = ?').get(user.advisor_id) : null;
   return {
     id: user.id,
     username: user.username,
@@ -16,23 +16,23 @@ function serializeUser(user) {
   };
 }
 
-router.get('/session', (req, res) => {
-  const userCount = db.prepare('SELECT COUNT(*) AS c FROM users').get().c;
-  const user = resolveUser(req);
+router.get('/session', async (req, res) => {
+  const userCount = (await db.prepare('SELECT COUNT(*) AS c FROM users').get()).c;
+  const user = await resolveUser(req);
   res.json({
     authenticated: !!user,
     firstRun: !AUTH_DISABLED && userCount === 0,
-    user: user ? serializeUser(user) : null,
+    user: user ? await serializeUser(user) : null,
   });
 });
 
-router.post('/login', (req, res) => {
+router.post('/login', async (req, res) => {
   const { username, password } = req.body || {};
   if (!password || !String(password).trim()) {
     return res.status(400).json({ error: 'La contraseña es requerida' });
   }
 
-  const userCount = db.prepare('SELECT COUNT(*) AS c FROM users').get().c;
+  const userCount = (await db.prepare('SELECT COUNT(*) AS c FROM users').get()).c;
 
   if (userCount === 0) {
     // Primer uso real: nadie ha creado ninguna cuenta todavia. Lo que se
@@ -42,23 +42,23 @@ router.post('/login', (req, res) => {
     if (String(password).length < 4) {
       return res.status(400).json({ error: 'La contraseña debe tener al menos 4 caracteres' });
     }
-    const info = db
-      .prepare("INSERT INTO users (username, password_hash, role, active) VALUES (?, ?, 'admin', 1)")
+    const info = await db
+      .prepare("INSERT INTO users (username, password_hash, role, active) VALUES (?, ?, 'admin', true)")
       .run(cleanUsername, hashPassword(String(password)));
     req.session.userId = info.lastInsertRowid;
-    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(info.lastInsertRowid);
-    return res.json({ ok: true, firstRun: true, user: serializeUser(user) });
+    const user = await db.prepare('SELECT * FROM users WHERE id = ?').get(info.lastInsertRowid);
+    return res.json({ ok: true, firstRun: true, user: await serializeUser(user) });
   }
 
   const cleanUsername = String(username || '').trim();
   const user = cleanUsername
-    ? db.prepare('SELECT * FROM users WHERE username = ? COLLATE NOCASE AND active = 1').get(cleanUsername)
+    ? await db.prepare('SELECT * FROM users WHERE lower(username) = lower(?) AND active = true').get(cleanUsername)
     : null;
   if (!user || !verifyPassword(String(password), user.password_hash)) {
     return res.status(401).json({ error: 'Usuario o contraseña incorrectos' });
   }
   req.session.userId = user.id;
-  res.json({ ok: true, firstRun: false, user: serializeUser(user) });
+  res.json({ ok: true, firstRun: false, user: await serializeUser(user) });
 });
 
 router.post('/logout', (req, res) => {

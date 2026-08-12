@@ -1,4 +1,4 @@
-# SalesForce CRM — Operativo
+# Nova CRM — Operativo
 
 Aplicación interna de ventas/operaciones: registro de clientes con asignación manual de asesor, control de SLA (24h), estadísticas de ventas, gestión del equipo y exportación de datos.
 
@@ -7,7 +7,8 @@ Reemplaza los mockups estáticos originales (`code.html` en las carpetas hermana
 ## Requisitos
 
 - **Node.js 22.5 o superior** (se probó con Node 24 LTS). Ya quedó instalado en este equipo durante el desarrollo — si necesitas reinstalarlo en otra PC, descárgalo de https://nodejs.org (elige la versión "LTS").
-- No necesita internet para funcionar (solo la primera vez, para `npm install` y para cargar la fuente Inter/íconos de Google Fonts — si la oficina no tiene internet, todo lo demás sigue funcionando, solo cambia la tipografía/íconos por la alternativa del sistema).
+- **Internet es obligatorio** (esto cambió): la base de datos ya no es un archivo local, vive en Postgres/Supabase en la nube — sin conexión a internet el programa no puede leer ni guardar nada.
+- Requiere el archivo `server/.env` con la cadena de conexión a Supabase (`DATABASE_URL=...`). Ya está creado en esta PC; ver la sección "Base de datos" más abajo si hay que recrearlo en otro equipo.
 
 ## Cómo iniciar
 
@@ -35,12 +36,22 @@ Deja la ventana de la consola abierta mientras el equipo esté usando el sistema
 
 ```
 app/
-  server/     Backend (Node.js + Express + SQLite integrado + WebSocket)
+  server/     Backend (Node.js + Express + Postgres/Supabase + WebSocket)
   public/     Frontend (HTML/CSS/JS, sin paso de compilación)
   iniciar.bat Lanzador para Windows
 ```
 
-La base de datos vive en `server/data/nova_crm.db` (se crea sola la primera vez). Los backups automáticos/manuales se guardan en `server/backups/`.
+Los backups automáticos/manuales (exportación JSON) se guardan en `server/backups/`.
+
+## Base de datos
+
+Los datos reales viven en Postgres, en un proyecto de Supabase (antes vivían en `server/data/nova_crm.db`, un archivo SQLite local — ese archivo se conserva como respaldo histórico pero ya no lo lee el programa en marcha).
+
+La conexión se configura en `server/.env` (no se sube a git — cada PC necesita el suyo):
+```
+DATABASE_URL=postgresql://postgres.xxxxx:CONTRASEÑA@aws-0-us-west-2.pooler.supabase.com:5432/postgres
+```
+Para recrearlo en otra PC: copia `server/.env.example` a `server/.env` y pega ahí la cadena de conexión real (Supabase dashboard → botón "Conectar" → pestaña "Directo" → modo "Session pooler" — el modo "Direct connection" no funciona desde redes que no soportan IPv6).
 
 ## Módulos
 
@@ -92,3 +103,4 @@ Si se necesita restablecer la contraseña de alguien, un Admin puede hacerlo des
 - **"node no se reconoce como comando"**: abre una ventana nueva de CMD/PowerShell (el PATH se actualiza al abrir una nueva ventana después de instalar Node) o reinicia el equipo.
 - **Otro equipo no puede conectarse**: confirma que ambos equipos están en la misma red WiFi, y que el Firewall de Windows no está bloqueando Node.js (la primera vez que arrancas el servidor, Windows suele preguntar si permites el acceso — elige "Permitir acceso").
 - **Puerto ocupado**: si el 4000 ya está en uso, arranca con otro puerto: `set PORT=4001 && npm start` (o edítalo en `iniciar.bat`).
+- **"Falta DATABASE_URL en .env" o error de conexión al arrancar**: falta el archivo `server/.env` o no tiene internet — ver la sección "Base de datos" arriba.

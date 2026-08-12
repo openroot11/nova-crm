@@ -6,8 +6,8 @@ const router = express.Router();
 
 const PUBLIC_KEYS = ['auto_backup_weekly', 'last_backup_at', 'monthly_sales_target'];
 
-router.get('/', (req, res) => {
-  const rows = db.prepare('SELECT key, value FROM settings').all();
+router.get('/', async (req, res) => {
+  const rows = await db.prepare('SELECT key, value FROM settings').all();
   const out = {};
   for (const row of rows) {
     if (PUBLIC_KEYS.includes(row.key)) out[row.key] = row.value;
@@ -15,20 +15,20 @@ router.get('/', (req, res) => {
   res.json(out);
 });
 
-router.put('/', (req, res) => {
+router.put('/', async (req, res) => {
   const body = req.body || {};
   const upsert = db.prepare(
     'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
   );
-  const tx = db.transaction(() => {
+  const tx = db.transaction(async () => {
     for (const key of PUBLIC_KEYS) {
       if (key === 'last_backup_at') continue; // solo lectura, lo gestiona el backend
       if (Object.prototype.hasOwnProperty.call(body, key)) {
-        upsert.run(key, String(body[key]));
+        await upsert.run(key, String(body[key]));
       }
     }
   });
-  tx();
+  await tx();
   broadcast('settings_changed', {});
   res.json({ ok: true });
 });

@@ -37,9 +37,14 @@ function cardHtml(lead, canReassign) {
         <span class="shrink-0 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold whitespace-nowrap ${badge.badgeClass}">${badge.label}</span>
       </div>
       <p class="text-[11px] text-on-surface-variant truncate">${escapeHtml(lead.product || '—')}${lead.city ? ` · ${escapeHtml(lead.city)}` : ''}</p>
-      <p class="text-[11px] text-on-surface-variant truncate flex items-center gap-1">
-        <span class="material-symbols-outlined text-[13px]">person</span>${escapeHtml(lead.advisor_name || 'Sin asignar')}
-      </p>
+      <div class="flex items-center justify-between gap-2">
+        <p class="text-[11px] text-on-surface-variant truncate flex items-center gap-1">
+          <span class="material-symbols-outlined text-[13px]">person</span>${escapeHtml(lead.advisor_name || 'Sin asignar')}
+        </p>
+        <span class="inline-flex items-center px-2 py-1 rounded-full text-[11px] font-bold ${lead.predicted_score >= 70 ? 'bg-secondary-container text-secondary' : lead.predicted_score >= 45 ? 'bg-primary-container text-primary' : 'bg-error-container text-error'}">
+          ${lead.predicted_score}%
+        </span>
+      </div>
       ${closed && lead.amount ? `<p class="text-body-sm font-bold text-primary">${formatMoney(lead.amount)}</p>` : ''}
       ${buttons.length ? `<div class="flex flex-wrap gap-1 pt-1">${buttons.join('')}</div>` : ''}
     </div>

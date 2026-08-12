@@ -9,9 +9,9 @@ const user = getCurrentUser();
 // dia (Ventas/SLA); coordinador suma reportes y equipo; admin ve todo,
 // incluyendo Ajustes (que ademas el backend ya protege con requireRole).
 const ROUTES_BY_ROLE = {
-  admin: ['dashboard', 'ventas', 'sla', 'seguimiento', 'informe', 'estadisticas', 'asesores', 'ajustes'],
-  coordinador: ['dashboard', 'ventas', 'sla', 'seguimiento', 'informe', 'estadisticas', 'asesores'],
-  asesor: ['ventas', 'sla', 'seguimiento'],
+  admin: ['dashboard', 'ventas', 'sla', 'seguimiento', 'clientes', 'informe', 'ventas-cerradas', 'estadisticas', 'ia', 'asesores', 'ajustes'],
+  coordinador: ['dashboard', 'ventas', 'sla', 'seguimiento', 'clientes', 'informe', 'ventas-cerradas', 'estadisticas', 'ia', 'asesores'],
+  asesor: ['ventas', 'sla', 'seguimiento', 'clientes'],
 };
 const allowedRoutes = ROUTES_BY_ROLE[user?.role] || ROUTES_BY_ROLE.asesor;
 // El Dashboard resume datos de todo el equipo (los mismos endpoints de
@@ -45,8 +45,11 @@ const routes = {
   ventas: () => import('./views/ventas.js'),
   sla: () => import('./views/sla.js'),
   seguimiento: () => import('./views/seguimiento.js'),
+  clientes: () => import('./views/clientes.js'),
   informe: () => import('./views/informe.js'),
+  'ventas-cerradas': () => import('./views/ventasCerradas.js'),
   estadisticas: () => import('./views/estadisticas.js'),
+  ia: () => import('./views/ia.js'),
   asesores: () => import('./views/asesores.js'),
   ajustes: () => import('./views/ajustes.js'),
 };
@@ -56,8 +59,11 @@ const titles = {
   ventas: 'Registro Operativo',
   sla: 'Control SLA 24h',
   seguimiento: 'Seguimiento Activo',
+  clientes: 'Clientes',
   informe: 'Informe Diario',
+  'ventas-cerradas': 'Ventas Cerradas',
   estadisticas: 'Rendimiento Comercial',
+  ia: 'Predicción IA',
   asesores: 'Gestión del Equipo',
   ajustes: 'Configuración y Exportación',
 };
@@ -147,7 +153,7 @@ async function render() {
   });
 
   pageTitle.textContent = titles[route];
-  document.title = `${titles[route]} · SalesForce CRM`;
+  document.title = `${titles[route]} · Nova CRM`;
 
   if (typeof currentUnmount === 'function') {
     try {

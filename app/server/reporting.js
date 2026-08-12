@@ -17,7 +17,7 @@ function monthRangeDefaults() {
 // sin quoted_at, y sin cerrar) dentro del rango. Se parte el rango en
 // bloques de 7 dias desde "from" y se promedia el conteo entre esos
 // bloques. advisorId null = agregado de todo el equipo.
-function computeWeeklyPendingAvg(from, to, advisorId) {
+async function computeWeeklyPendingAvg(from, to, advisorId) {
   const fromD = new Date(`${from}T00:00:00Z`);
   const toD = new Date(`${to}T00:00:00Z`);
   const totalDays = Math.max(1, Math.round((toD - fromD) / 86400000) + 1);
@@ -33,7 +33,7 @@ function computeWeeklyPendingAvg(from, to, advisorId) {
     const weekEnd = weekEndCandidate > toD ? toD : weekEndCandidate;
     const wf = `${weekStart.toISOString().slice(0, 10)} 00:00:00`;
     const wt = `${weekEnd.toISOString().slice(0, 10)} 23:59:59`;
-    const row = advisorId ? stmt.get(advisorId, wf, wt) : stmt.get(wf, wt);
+    const row = advisorId ? await stmt.get(advisorId, wf, wt) : await stmt.get(wf, wt);
     sum += row.c;
   }
   return Math.round((sum / weeks) * 10) / 10;
@@ -45,16 +45,16 @@ function computeWeeklyPendingAvg(from, to, advisorId) {
  * reporte que reemplaza la comparacion manual que se armaba en la carpeta de
  * estadisticas.
  */
-function computeFunnelReport(fromInput, toInput, advisorIdFilter) {
+async function computeFunnelReport(fromInput, toInput, advisorIdFilter) {
   const defaults = monthRangeDefaults();
   const from = fromInput || defaults.from;
   const to = toInput || defaults.to;
   const fromTs = `${from} 00:00:00`;
   const toTs = `${to} 23:59:59`;
 
-  let advisors = db.prepare('SELECT * FROM advisors WHERE is_group = 0 AND active = 1 ORDER BY priority_order ASC').all();
+  let advisors = await db.prepare('SELECT * FROM advisors WHERE is_group = false AND active = true ORDER BY priority_order ASC').all();
   if (advisorIdFilter) {
-    advisors = db.prepare('SELECT * FROM advisors WHERE id = ?').all(Number(advisorIdFilter));
+    advisors = await db.prepare('SELECT * FROM advisors WHERE id = ?').all(Number(advisorIdFilter));
   }
 
   // Cada metrica se cuenta contra SU PROPIA fecha (cuando paso, no cuando se
@@ -79,52 +79,54 @@ function computeFunnelReport(fromInput, toInput, advisorIdFilter) {
   );
   const reasignadosStmt = db.prepare('SELECT COUNT(*) AS c FROM reassignments WHERE from_advisor_id = ? AND at >= ? AND at <= ?');
 
-  const rows = advisors.map((advisor) => {
-    const asignadosLeads = asignadosStmt.all(advisor.id, fromTs, toTs);
-    const asignados = asignadosLeads.length;
-    const contactados = contactadosStmt.get(advisor.id, fromTs, toTs).c;
-    const cotizados = cotizadosStmt.get(advisor.id, fromTs, toTs).c;
-    const ganados = vendidosStmt.all(advisor.id, fromTs, toTs);
-    const monto_vendido = ganados.reduce((s, l) => s + (l.amount || 0), 0);
-    const perdidos = perdidosStmt.get(advisor.id, fromTs, toTs).c;
-    const pendientes_por_cotizar = pendientesStmt.get(advisor.id, fromTs, toTs).c;
-    const reasignados = reasignadosStmt.get(advisor.id, fromTs, toTs).c;
+  const rows = await Promise.all(
+    advisors.map(async (advisor) => {
+      const asignadosLeads = await asignadosStmt.all(advisor.id, fromTs, toTs);
+      const asignados = asignadosLeads.length;
+      const contactados = (await contactadosStmt.get(advisor.id, fromTs, toTs)).c;
+      const cotizados = (await cotizadosStmt.get(advisor.id, fromTs, toTs)).c;
+      const ganados = await vendidosStmt.all(advisor.id, fromTs, toTs);
+      const monto_vendido = ganados.reduce((s, l) => s + (l.amount || 0), 0);
+      const perdidos = (await perdidosStmt.get(advisor.id, fromTs, toTs)).c;
+      const pendientes_por_cotizar = (await pendientesStmt.get(advisor.id, fromTs, toTs)).c;
+      const reasignados = (await reasignadosStmt.get(advisor.id, fromTs, toTs)).c;
 
-    const slaOk = asignadosLeads.filter((l) => sla.slaStatus(l) !== 'vencido').length;
-    const sla_cumplimiento = pct(slaOk, asignados);
+      const slaOk = asignadosLeads.filter((l) => sla.firstContactSlaMet(l)).length;
+      const sla_cumplimiento = pct(slaOk, asignados);
 
-    const closeHours = ganados
-      .filter((l) => l.closed_at)
-      .map((l) => sla.hoursBetween(l.created_at, sla.parseUtc(l.closed_at)));
-    const tiempo_promedio_cierre_h = closeHours.length
-      ? Math.round((closeHours.reduce((s, h) => s + h, 0) / closeHours.length) * 10) / 10
-      : null;
+      const closeHours = ganados
+        .filter((l) => l.closed_at)
+        .map((l) => sla.hoursBetween(l.created_at, sla.parseUtc(l.closed_at)));
+      const tiempo_promedio_cierre_h = closeHours.length
+        ? Math.round((closeHours.reduce((s, h) => s + h, 0) / closeHours.length) * 10) / 10
+        : null;
 
-    return {
-      advisor_id: advisor.id,
-      name: advisor.name,
-      asignados,
-      contactados,
-      cotizados,
-      vendidos: ganados.length,
-      perdidos,
-      pendientes_por_cotizar,
-      reasignados,
-      monto_vendido,
-      tasa_contacto: pct(contactados, asignados),
-      tasa_cotizacion: pct(cotizados, contactados),
-      // Indicadores fijos del tablero (mismas etiquetas que el reporte
-      // original en Bolt): efectividad y cotizados van sobre "asignados",
-      // no sobre "contactados" - son numeros distintos a proposito.
-      efectividad_asesor: pct(ganados.length, asignados),
-      cotizados_sobre_asignados: pct(cotizados, asignados),
-      tasa_reasignados: pct(reasignados, asignados),
-      prom_semanal_sin_cotizar: computeWeeklyPendingAvg(from, to, advisor.id),
-      tasa_cierre: pct(ganados.length, cotizados),
-      sla_cumplimiento,
-      tiempo_promedio_cierre_h,
-    };
-  });
+      return {
+        advisor_id: advisor.id,
+        name: advisor.name,
+        asignados,
+        contactados,
+        cotizados,
+        vendidos: ganados.length,
+        perdidos,
+        pendientes_por_cotizar,
+        reasignados,
+        monto_vendido,
+        tasa_contacto: pct(contactados, asignados),
+        tasa_cotizacion: pct(cotizados, contactados),
+        // Indicadores fijos del tablero (mismas etiquetas que el reporte
+        // original en Bolt): efectividad y cotizados van sobre "asignados",
+        // no sobre "contactados" - son numeros distintos a proposito.
+        efectividad_asesor: pct(ganados.length, asignados),
+        cotizados_sobre_asignados: pct(cotizados, asignados),
+        tasa_reasignados: pct(reasignados, asignados),
+        prom_semanal_sin_cotizar: await computeWeeklyPendingAvg(from, to, advisor.id),
+        tasa_cierre: pct(ganados.length, cotizados),
+        sla_cumplimiento,
+        tiempo_promedio_cierre_h,
+      };
+    })
+  );
 
   // Ranking por monto vendido (el criterio que de verdad le importa al
   // dueño al comparar el equipo); en empate, por tasa de cierre.
@@ -164,7 +166,7 @@ function computeFunnelReport(fromInput, toInput, advisorIdFilter) {
   totals.efectividad_asesor = pct(totals.vendidos, totals.asignados);
   totals.cotizados_sobre_asignados = pct(totals.cotizados, totals.asignados);
   totals.tasa_reasignados = pct(totals.reasignados, totals.asignados);
-  totals.prom_semanal_sin_cotizar = computeWeeklyPendingAvg(from, to, null);
+  totals.prom_semanal_sin_cotizar = await computeWeeklyPendingAvg(from, to, null);
   totals.tasa_cierre = pct(totals.vendidos, totals.cotizados);
 
   return { from, to, advisors: rows, totals };
@@ -177,14 +179,14 @@ function computeFunnelReport(fromInput, toInput, advisorIdFilter) {
  * inversion registrada (organico, referido, otro) muestran solo volumen y
  * conversion, sin costo (no aplica).
  */
-function computeProfitabilityReport(fromInput, toInput) {
+async function computeProfitabilityReport(fromInput, toInput) {
   const defaults = monthRangeDefaults();
   const from = fromInput || defaults.from;
   const to = toInput || defaults.to;
   const fromTs = `${from} 00:00:00`;
   const toTs = `${to} 23:59:59`;
 
-  const leads = db.prepare('SELECT * FROM leads WHERE created_at >= ? AND created_at <= ?').all(fromTs, toTs);
+  const leads = await db.prepare('SELECT * FROM leads WHERE created_at >= ? AND created_at <= ?').all(fromTs, toTs);
 
   const byChannel = new Map();
   for (const lead of leads) {
@@ -203,7 +205,7 @@ function computeProfitabilityReport(fromInput, toInput) {
   // Google Ads.
   const fromMonth = from.slice(0, 7);
   const toMonth = to.slice(0, 7);
-  const spendRows = db
+  const spendRows = await db
     .prepare('SELECT month, amount FROM ad_spend WHERE month >= ? AND month <= ? ORDER BY month ASC')
     .all(fromMonth, toMonth);
   const totalSpend = spendRows.reduce((s, r) => s + r.amount, 0);
@@ -225,11 +227,11 @@ function computeProfitabilityReport(fromInput, toInput) {
   // lo que se anota a mano en Informe), no solo los de Google Ads. Mide
   // "que tan caro me sale cada contacto que llega al negocio", distinto de
   // costo_por_lead (que mide especificamente el canal pagado).
-  const rawLeadsRow = db
+  const rawLeadsRow = await db
     .prepare('SELECT COALESCE(SUM(whatsapp + correo + llamadas), 0) AS c FROM informe_canales WHERE fecha >= ? AND fecha <= ?')
     .get(from, to);
   const rawLeadsTotal = rawLeadsRow.c;
-  const totalVentasRow = db
+  const totalVentasRow = await db
     .prepare("SELECT COUNT(*) AS c, COALESCE(SUM(amount), 0) AS ingresos FROM leads WHERE status = 'cerrado_ganado' AND closed_at >= ? AND closed_at <= ?")
     .get(fromTs, toTs);
   const costo_por_lead_crudo = rawLeadsTotal ? Math.round((totalSpend / rawLeadsTotal) * 100) / 100 : null;
@@ -270,11 +272,11 @@ function computeProfitabilityReport(fromInput, toInput) {
  * numero) y su tendencia mes a mes. Es el reporte pensado para entregarse
  * a un asesor puntual, no para comparar al equipo.
  */
-function computeAdvisorReport(advisorId, fromInput, toInput) {
-  const advisor = db.prepare('SELECT * FROM advisors WHERE id = ?').get(Number(advisorId));
+async function computeAdvisorReport(advisorId, fromInput, toInput) {
+  const advisor = await db.prepare('SELECT * FROM advisors WHERE id = ?').get(Number(advisorId));
   if (!advisor) return null;
 
-  const team = computeFunnelReport(fromInput, toInput);
+  const team = await computeFunnelReport(fromInput, toInput);
   const own = team.advisors.find((a) => a.advisor_id === advisor.id);
   const from = team.from;
   const to = team.to;
@@ -283,7 +285,7 @@ function computeAdvisorReport(advisorId, fromInput, toInput) {
 
   // Propio: leads asignados a esta persona en el rango (mismo criterio de
   // "asignados" que el resto de los reportes).
-  const ownLeads = db
+  const ownLeads = await db
     .prepare('SELECT * FROM leads WHERE assigned_advisor_id = ? AND created_at >= ? AND created_at <= ?')
     .all(advisor.id, fromTs, toTs);
 
@@ -331,7 +333,7 @@ function computeAdvisorReport(advisorId, fromInput, toInput) {
     total_intentos: quotedLeads.reduce((s, l) => s + (l.followup_count || 0), 0),
   };
 
-  const reasignaciones_detalle = db
+  const reasignaciones_detalle = await db
     .prepare(
       `SELECT r.at, r.reason, l.client_name, ta.name AS to_advisor_name
        FROM reassignments r
@@ -351,7 +353,7 @@ function computeAdvisorReport(advisorId, fromInput, toInput) {
     const monthStart = monthDate.toISOString().slice(0, 10);
     const monthEndDate = new Date(Date.UTC(monthDate.getUTCFullYear(), monthDate.getUTCMonth() + 1, 0));
     const monthEnd = monthEndDate.toISOString().slice(0, 10);
-    const row = db
+    const row = await db
       .prepare(
         "SELECT COUNT(*) AS asignados, SUM(CASE WHEN status = 'cerrado_ganado' THEN 1 ELSE 0 END) AS vendidos, COALESCE(SUM(CASE WHEN status = 'cerrado_ganado' THEN amount ELSE 0 END), 0) AS monto FROM leads WHERE assigned_advisor_id = ? AND created_at >= ? AND created_at <= ?"
       )
@@ -385,14 +387,14 @@ function computeAdvisorReport(advisorId, fromInput, toInput) {
  * se vende en cada una (para el mapa del Dashboard). Solo cuenta leads que
  * tienen ciudad registrada -- los que no, no aparecen en el mapa.
  */
-function computeGeoReport(fromInput, toInput) {
+async function computeGeoReport(fromInput, toInput) {
   const defaults = monthRangeDefaults();
   const from = fromInput || defaults.from;
   const to = toInput || defaults.to;
   const fromTs = `${from} 00:00:00`;
   const toTs = `${to} 23:59:59`;
 
-  const leads = db
+  const leads = await db
     .prepare("SELECT city, product, status, amount FROM leads WHERE city IS NOT NULL AND city != '' AND created_at >= ? AND created_at <= ?")
     .all(fromTs, toTs);
 
@@ -440,14 +442,14 @@ const OUTCOME_LABELS = { cerrado_ganado: 'Ganado', cerrado_perdido: 'Perdido', e
  * outcome:) porque "Otro" es un valor valido tanto en canal como en
  * producto y no deben colisionar en el mismo diagrama.
  */
-function computeChannelProductFlow(fromInput, toInput) {
+async function computeChannelProductFlow(fromInput, toInput) {
   const defaults = monthRangeDefaults();
   const from = fromInput || defaults.from;
   const to = toInput || defaults.to;
   const fromTs = `${from} 00:00:00`;
   const toTs = `${to} 23:59:59`;
 
-  const leads = db
+  const leads = await db
     .prepare('SELECT channel_detail, product, status FROM leads WHERE created_at >= ? AND created_at <= ?')
     .all(fromTs, toTs);
 
@@ -491,7 +493,7 @@ function computeChannelProductFlow(fromInput, toInput) {
  * tendencia_mensual en computeAdvisorReport, pero agregando todo el equipo
  * en vez de filtrar por un asesor.
  */
-function computeMonthlyTrend(months = 6) {
+async function computeMonthlyTrend(months = 6) {
   const now = new Date();
   const trend = [];
   for (let i = months - 1; i >= 0; i--) {
@@ -499,7 +501,7 @@ function computeMonthlyTrend(months = 6) {
     const monthStart = monthDate.toISOString().slice(0, 10);
     const monthEndDate = new Date(Date.UTC(monthDate.getUTCFullYear(), monthDate.getUTCMonth() + 1, 0));
     const monthEnd = monthEndDate.toISOString().slice(0, 10);
-    const row = db
+    const row = await db
       .prepare(
         "SELECT COUNT(*) AS ventas_count, COALESCE(SUM(amount), 0) AS ventas_monto FROM leads WHERE status = 'cerrado_ganado' AND closed_at >= ? AND closed_at <= ?"
       )
@@ -513,13 +515,152 @@ function computeMonthlyTrend(months = 6) {
   return trend;
 }
 
+/**
+ * Ventas cerradas dia por dia dentro de un rango (por defecto, ultimos 30
+ * dias) -- para la grafica de tendencia de la pestaña "Ventas Cerradas".
+ * Zero-fill: los dias sin ventas igual aparecen en 0, para que la grafica no
+ * tenga huecos.
+ */
+async function computeDailySalesTrend(fromInput, toInput) {
+  const to = toInput || new Date().toISOString().slice(0, 10);
+  const from = fromInput || (() => {
+    const d = new Date(`${to}T00:00:00Z`);
+    d.setUTCDate(d.getUTCDate() - 29);
+    return d.toISOString().slice(0, 10);
+  })();
+
+  const rows = await db
+    .prepare(
+      `SELECT substr(closed_at, 1, 10) AS fecha, COUNT(*) AS ventas_count, COALESCE(SUM(amount), 0) AS ventas_monto
+       FROM leads
+       WHERE status = 'cerrado_ganado' AND closed_at >= ? AND closed_at <= ?
+       GROUP BY fecha`
+    )
+    .all(`${from} 00:00:00`, `${to} 23:59:59`);
+  const byDate = new Map(rows.map((r) => [r.fecha, r]));
+
+  const fromD = new Date(`${from}T00:00:00Z`);
+  const toD = new Date(`${to}T00:00:00Z`);
+  const totalDays = Math.max(1, Math.round((toD - fromD) / 86400000) + 1);
+
+  const trend = [];
+  for (let i = 0; i < totalDays; i++) {
+    const day = new Date(fromD.getTime() + i * 86400000);
+    const key = day.toISOString().slice(0, 10);
+    const row = byDate.get(key);
+    trend.push({
+      fecha: key,
+      ventas_monto: row ? row.ventas_monto : 0,
+      ventas_count: row ? row.ventas_count : 0,
+    });
+  }
+  return { from, to, trend };
+}
+
+async function computeForecast(horizonInput, intervalInput) {
+  const horizon = Number(horizonInput) || 15;
+  const interval = ['day', 'week', 'month'].includes(intervalInput) ? intervalInput : 'day';
+  const allLeads = await db.prepare('SELECT created_at, status, amount, product FROM leads').all();
+  const today = new Date();
+  const startDate = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
+  const historyDays = 45;
+  const historyStart = new Date(startDate.getTime() - (historyDays - 1) * 86400000);
+  const dailyCounts = new Map();
+  const dailyRevenues = new Map();
+  const productBuckets = new Map();
+
+  for (let i = 0; i < historyDays; i++) {
+    const day = new Date(historyStart.getTime() + i * 86400000);
+    const key = day.toISOString().slice(0, 10);
+    dailyCounts.set(key, 0);
+    dailyRevenues.set(key, 0);
+  }
+
+  for (const lead of allLeads) {
+    const dateKey = lead.created_at.slice(0, 10);
+    if (!dailyCounts.has(dateKey)) continue;
+    dailyCounts.set(dateKey, dailyCounts.get(dateKey) + 1);
+    if (lead.status === 'cerrado_ganado') {
+      dailyRevenues.set(dateKey, dailyRevenues.get(dateKey) + (lead.amount || 0));
+    }
+    const product = lead.product || 'Sin producto';
+    if (!productBuckets.has(product)) productBuckets.set(product, { leads: 0, revenue: 0 });
+    productBuckets.get(product).leads += 1;
+    if (lead.status === 'cerrado_ganado') productBuckets.get(product).revenue += lead.amount || 0;
+  }
+
+  const history = [];
+  for (let i = 0; i < historyDays; i++) {
+    const day = new Date(historyStart.getTime() + i * 86400000);
+    const label = day.toLocaleDateString('es-CO', { day: '2-digit', month: 'short' });
+    const key = day.toISOString().slice(0, 10);
+    history.push({ label, leads: dailyCounts.get(key) || 0, revenue: dailyRevenues.get(key) || 0 });
+  }
+
+  const weeklySums = [];
+  for (let i = 0; i < Math.ceil(historyDays / 7); i++) {
+    const weekStart = i * 7;
+    const weekSlice = history.slice(weekStart, weekStart + 7);
+    const weekLabel = `Semana ${i + 1}`;
+    weeklySums.push({ label: weekLabel, leads: weekSlice.reduce((sum, item) => sum + item.leads, 0), revenue: weekSlice.reduce((sum, item) => sum + item.revenue, 0) });
+  }
+
+  const monthlySums = [];
+  const monthMap = new Map();
+  for (const item of history) {
+    const monthKey = item.label.slice(-4);
+    if (!monthMap.has(monthKey)) monthMap.set(monthKey, { leads: 0, revenue: 0, label: monthKey });
+    const bucket = monthMap.get(monthKey);
+    bucket.leads += item.leads;
+    bucket.revenue += item.revenue;
+  }
+  monthMap.forEach((value) => monthlySums.push(value));
+
+  const sourceSeries = interval === 'week' ? weeklySums : interval === 'month' ? monthlySums : history;
+  const lastAverage = sourceSeries.length ? Math.round(sourceSeries.reduce((sum, item) => sum + item.leads, 0) / sourceSeries.length) : 0;
+  const trendFactor = history.slice(-7).reduce((sum, item) => sum + item.leads, 0) / 7 || 1;
+  const prediction = [];
+  for (let i = 1; i <= horizon; i++) {
+    const factor = 1 + (i / horizon) * 0.12;
+    const predictedLeads = Math.max(0, Math.round(lastAverage * factor));
+    prediction.push({ label: interval === 'week' ? `Próx. S${i}` : interval === 'month' ? `Próx. M${i}` : `Día +${i}`, leads: predictedLeads, revenue: Math.round(predictedLeads * 120000) });
+  }
+
+  const byProduct = [...productBuckets.entries()]
+    .sort((a, b) => b[1].leads - a[1].leads)
+    .slice(0, 6)
+    .map(([product, data]) => ({ product, leads: data.leads, revenue: data.revenue }));
+
+  const totalPredictedLeads = prediction.reduce((sum, item) => sum + item.leads, 0);
+  const totalPredictedRevenue = prediction.reduce((sum, item) => sum + item.revenue, 0);
+  const averageLeads = sourceSeries.length ? Math.round(lastAverage) : 0;
+  const averageRevenue = sourceSeries.length ? Math.round(sourceSeries.reduce((sum, item) => sum + item.revenue, 0) / sourceSeries.length) : 0;
+  const lastIntervalTotal = sourceSeries.length ? sourceSeries[sourceSeries.length - 1].leads : 0;
+  const growthPct = lastIntervalTotal ? Math.round(((averageLeads - lastIntervalTotal) / lastIntervalTotal) * 1000) / 10 : 0;
+
+  return {
+    horizon,
+    interval,
+    history: interval === 'week' ? weeklySums : interval === 'month' ? monthlySums : history,
+    forecast: prediction,
+    by_product: byProduct,
+    total_predicted_leads: totalPredictedLeads,
+    total_predicted_revenu: totalPredictedRevenue,
+    average_leads: averageLeads,
+    average_revenue: averageRevenue,
+    growth_pct: growthPct,
+  };
+}
+
 module.exports = {
   computeFunnelReport,
   computeProfitabilityReport,
   computeAdvisorReport,
   computeGeoReport,
   computeMonthlyTrend,
+  computeDailySalesTrend,
   computeChannelProductFlow,
+  computeForecast,
   monthRangeDefaults,
   pct,
 };

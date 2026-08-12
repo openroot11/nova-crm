@@ -1,11 +1,11 @@
 const { db } = require('./db');
 
-function getOrderedAdvisors() {
+async function getOrderedAdvisors() {
   return db.prepare('SELECT * FROM advisors ORDER BY priority_order ASC').all();
 }
 
-function setPaused(advisorId, paused) {
-  db.prepare('UPDATE advisors SET active = ? WHERE id = ?').run(paused ? 0 : 1, advisorId);
+async function setPaused(advisorId, paused) {
+  await db.prepare('UPDATE advisors SET active = ? WHERE id = ?').run(!paused, advisorId);
 }
 
 module.exports = {

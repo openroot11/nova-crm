@@ -11,10 +11,10 @@ function renderOverlay(firstRun, onSuccess) {
   overlay.innerHTML = `
     <div class="w-full max-w-sm bg-surface rounded-xl shadow-xl border border-outline-variant p-8">
       <div class="flex flex-col items-center mb-6">
-        <div class="w-12 h-12 rounded-full bg-primary-container text-on-primary-container flex items-center justify-center font-bold text-lg mb-3">SF</div>
-        <h1 class="text-headline-md font-headline-md font-extrabold text-primary text-center">SalesForce CRM</h1>
+        <div class="w-12 h-12 rounded-full bg-primary-container text-on-primary-container flex items-center justify-center font-bold text-lg mb-3">NC</div>
+        <h1 class="text-headline-md font-headline-md font-extrabold text-primary text-center">Nova CRM</h1>
         <p class="text-body-sm font-body-sm text-on-surface-variant text-center mt-1">
-          ${firstRun ? 'Crea la primera cuenta (administrador) para empezar a usar el sistema.' : 'Ingresa con tu usuario para continuar.'}
+          ${firstRun ? 'Crea la primera cuenta de administrador para iniciar el control de ventas.' : 'Ingresa con tu usuario para acceder al sistema.'}
         </p>
       </div>
       <form id="auth-form" class="space-y-4">
@@ -47,20 +47,44 @@ function renderOverlay(firstRun, onSuccess) {
 
   const form = overlay.querySelector('#auth-form');
   const errorEl = overlay.querySelector('#auth-error');
+  const submitBtn = form.querySelector('button[type="submit"]');
+  const usernameInput = overlay.querySelector('#auth-username');
+
+  usernameInput.focus();
+
+  async function showError(message) {
+    errorEl.textContent = message;
+    errorEl.classList.remove('hidden');
+    submitBtn.disabled = false;
+    submitBtn.classList.remove('opacity-60', 'cursor-not-allowed');
+  }
 
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     errorEl.classList.add('hidden');
     const username = overlay.querySelector('#auth-username').value.trim();
     const password = overlay.querySelector('#auth-password').value;
+    if (!username) {
+      return showError('El usuario es requerido');
+    }
+    if (!password) {
+      return showError('La contraseña es requerida');
+    }
     if (firstRun) {
       const confirm = overlay.querySelector('#auth-password-confirm').value;
       if (password !== confirm) {
-        errorEl.textContent = 'Las contraseñas no coinciden';
-        errorEl.classList.remove('hidden');
-        return;
+        return showError('Las contraseñas no coinciden');
+      }
+      if (password.length < 4) {
+        return showError('La contraseña debe tener al menos 4 caracteres');
       }
     }
+
+    submitBtn.disabled = true;
+    submitBtn.classList.add('opacity-60', 'cursor-not-allowed');
+    const originalText = submitBtn.textContent;
+    submitBtn.textContent = firstRun ? 'Creando cuenta...' : 'Ingresando...';
+
     try {
       const res = await fetch('/api/auth/login', {
         method: 'POST',
@@ -69,16 +93,18 @@ function renderOverlay(firstRun, onSuccess) {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        errorEl.textContent = data.error || 'No se pudo iniciar sesión';
-        errorEl.classList.remove('hidden');
+        showError(data.error || 'No se pudo iniciar sesión');
         return;
       }
       currentUser = data.user || null;
       overlay.remove();
       onSuccess();
     } catch {
-      errorEl.textContent = 'No se pudo conectar con el servidor';
-      errorEl.classList.remove('hidden');
+      showError('No se pudo conectar con el servidor');
+    } finally {
+      submitBtn.disabled = false;
+      submitBtn.classList.remove('opacity-60', 'cursor-not-allowed');
+      submitBtn.textContent = originalText;
     }
   });
 }

@@ -11,12 +11,12 @@ function monthPrefix(offsetMonths = 0) {
   return d.toISOString().slice(0, 7); // YYYY-MM
 }
 
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
   const thisMonth = monthPrefix(0);
   const prevMonth = monthPrefix(-1);
 
-  const allLeads = db.prepare('SELECT * FROM leads').all();
-  const allAdvisors = db.prepare('SELECT * FROM advisors WHERE is_group = 0 ORDER BY priority_order ASC').all();
+  const allLeads = await db.prepare('SELECT * FROM leads').all();
+  const allAdvisors = await db.prepare('SELECT * FROM advisors WHERE is_group = false ORDER BY priority_order ASC').all();
   const advisors = allAdvisors.filter((a) => a.active);
 
   const wonThisMonth = allLeads.filter((l) => l.status === 'cerrado_ganado' && l.closed_at && l.closed_at.startsWith(thisMonth));
@@ -66,6 +66,8 @@ router.get('/', (req, res) => {
   for (const key of Object.keys(statusLabels)) distribution[key] = 0;
   for (const lead of allLeads) distribution[lead.status] = (distribution[lead.status] || 0) + 1;
 
+  const targetRow = await db.prepare("SELECT value FROM settings WHERE key = 'monthly_sales_target'").get();
+
   res.json({
     total_sales_month: totalSalesMonth,
     total_sales_growth_pct: salesGrowthPct,
@@ -80,11 +82,8 @@ router.get('/', (req, res) => {
       count,
     })),
     total_leads: allLeads.length,
-    monthly_trend: reporting.computeMonthlyTrend(6),
-    monthly_sales_target: (() => {
-      const row = db.prepare("SELECT value FROM settings WHERE key = 'monthly_sales_target'").get();
-      return row ? Number(row.value) : null;
-    })(),
+    monthly_trend: await reporting.computeMonthlyTrend(6),
+    monthly_sales_target: targetRow ? Number(targetRow.value) : null,
   });
 });
 
@@ -94,8 +93,8 @@ router.get('/', (req, res) => {
  * asesor, en un rango de fechas (por defecto el mes calendario actual), con
  * cumplimiento de SLA, tiempo promedio de cierre y ranking por monto vendido.
  */
-router.get('/funnel', (req, res) => {
-  const report = reporting.computeFunnelReport(req.query.from, req.query.to, req.query.advisor_id);
+router.get('/funnel', async (req, res) => {
+  const report = await reporting.computeFunnelReport(req.query.from, req.query.to, req.query.advisor_id);
   res.json(report);
 });
 
@@ -104,8 +103,8 @@ router.get('/funnel', (req, res) => {
  * Rentabilidad de leads por canal/origen contra la inversion de Google Ads
  * registrada en Ajustes -> Inversión Publicitaria (ver routes/marketing.js).
  */
-router.get('/profitability', (req, res) => {
-  const report = reporting.computeProfitabilityReport(req.query.from, req.query.to);
+router.get('/profitability', async (req, res) => {
+  const report = await reporting.computeProfitabilityReport(req.query.from, req.query.to);
   res.json(report);
 });
 
@@ -115,8 +114,8 @@ router.get('/profitability', (req, res) => {
  * equipo, desglose por producto/canal, velocidad de respuesta, seguimiento
  * y tendencia mensual. Pensado para generar un reporte entregable por persona.
  */
-router.get('/advisor/:id', (req, res) => {
-  const report = reporting.computeAdvisorReport(req.params.id, req.query.from, req.query.to);
+router.get('/advisor/:id', async (req, res) => {
+  const report = await reporting.computeAdvisorReport(req.params.id, req.query.from, req.query.to);
   if (!report) return res.status(404).json({ error: 'Asesor no encontrado' });
   res.json(report);
 });
@@ -126,8 +125,8 @@ router.get('/advisor/:id', (req, res) => {
  * Leads por ciudad en el rango, con el producto que mas se vende en cada
  * una -- para el mapa de Colombia del Dashboard.
  */
-router.get('/geo', (req, res) => {
-  const report = reporting.computeGeoReport(req.query.from, req.query.to);
+router.get('/geo', async (req, res) => {
+  const report = await reporting.computeGeoReport(req.query.from, req.query.to);
   res.json(report);
 });
 
@@ -136,8 +135,23 @@ router.get('/geo', (req, res) => {
  * Flujo canal -> producto -> resultado en el rango, para el diagrama
  * "Flujo de Leads" de Estadisticas (junto a Rentabilidad de Leads).
  */
-router.get('/flow', (req, res) => {
-  const report = reporting.computeChannelProductFlow(req.query.from, req.query.to);
+router.get('/flow', async (req, res) => {
+  const report = await reporting.computeChannelProductFlow(req.query.from, req.query.to);
+  res.json(report);
+});
+
+/**
+ * GET /api/kpis/daily-trend?from=YYYY-MM-DD&to=YYYY-MM-DD
+ * Ventas cerradas dia por dia en el rango (por defecto ultimos 30 dias),
+ * para la grafica de tendencia de "Ventas Cerradas".
+ */
+router.get('/daily-trend', async (req, res) => {
+  const report = await reporting.computeDailySalesTrend(req.query.from, req.query.to);
+  res.json(report);
+});
+
+router.get('/forecast', async (req, res) => {
+  const report = await reporting.computeForecast(req.query.horizon, req.query.interval);
   res.json(report);
 });
 

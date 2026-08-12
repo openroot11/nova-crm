@@ -5,6 +5,10 @@ node_modules/
 app/server/data/
 app/server/backups/
 
+# Credenciales de conexion a la base de datos (Supabase), nunca al repo
+.env
+app/server/.env
+
 # Reportes/exports reales del negocio (facturas, ventas), nunca al repo
 reportes mensuales/
 

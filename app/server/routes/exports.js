@@ -4,21 +4,21 @@ const { buildFullDump, writeBackupFile } = require('../backup');
 
 const router = express.Router();
 
-router.get('/json', (req, res) => {
-  const dump = buildFullDump();
+router.get('/json', async (req, res) => {
+  const dump = await buildFullDump();
   const stamp = dump.exported_at.replace(/[:.]/g, '-');
   res.setHeader('Content-Disposition', `attachment; filename="nova-crm-backup-${stamp}.json"`);
   res.setHeader('Content-Type', 'application/json');
   res.send(JSON.stringify(dump, null, 2));
 });
 
-router.post('/json/save', (req, res) => {
-  const filePath = writeBackupFile();
+router.post('/json/save', async (req, res) => {
+  const filePath = await writeBackupFile();
   res.json({ ok: true, path: filePath });
 });
 
-router.get('/xlsx', (req, res) => {
-  const dump = buildFullDump();
+router.get('/xlsx', async (req, res) => {
+  const dump = await buildFullDump();
   const wb = XLSX.utils.book_new();
 
   const leadsSheet = XLSX.utils.json_to_sheet(

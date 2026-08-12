@@ -14,13 +14,13 @@ function isValidFecha(fecha) {
 // cerrado ese dia especifico). Solo "Leads del dia" (canales) sigue siendo
 // manual, porque son TODOS los mensajes/llamadas que llegan, incluyendo
 // los que nunca se registran como lead en el sistema.
-router.get('/:fecha', (req, res) => {
+router.get('/:fecha', async (req, res) => {
   const { fecha } = req.params;
   if (!isValidFecha(fecha)) return res.status(400).json({ error: 'Fecha invalida (usa YYYY-MM-DD)' });
   const from = `${fecha} 00:00:00`;
   const to = `${fecha} 23:59:59`;
 
-  const advisors = db.prepare('SELECT id, name FROM advisors WHERE is_group = 0 AND active = 1 ORDER BY priority_order ASC').all();
+  const advisors = await db.prepare('SELECT id, name FROM advisors WHERE is_group = false AND active = true ORDER BY priority_order ASC').all();
 
   const asignadosStmt = db.prepare('SELECT COUNT(*) AS c FROM leads WHERE assigned_advisor_id = ? AND created_at >= ? AND created_at <= ?');
   const contactadosStmt = db.prepare(
@@ -35,24 +35,42 @@ router.get('/:fecha', (req, res) => {
   const ventasStmt = db.prepare(
     "SELECT * FROM leads WHERE assigned_advisor_id = ? AND status = 'cerrado_ganado' AND closed_at >= ? AND closed_at <= ? ORDER BY closed_at ASC"
   );
+  const declinadosStmt = db.prepare(
+    "SELECT * FROM leads WHERE assigned_advisor_id = ? AND status = 'cerrado_perdido' AND closed_at >= ? AND closed_at <= ? ORDER BY closed_at ASC"
+  );
 
-  const asesores = advisors.map((a) => ({
-    advisor_id: a.id,
-    name: a.name,
-    asignados: asignadosStmt.get(a.id, from, to).c,
-    contactados: contactadosStmt.get(a.id, from, to).c,
-    cotizados: cotizadosStmt.get(a.id, from, to).c,
-    pendientes: pendientesStmt.get(a.id, from, to).c,
-  }));
+  const asesores = await Promise.all(
+    advisors.map(async (a) => ({
+      advisor_id: a.id,
+      name: a.name,
+      asignados: (await asignadosStmt.get(a.id, from, to)).c,
+      contactados: (await contactadosStmt.get(a.id, from, to)).c,
+      cotizados: (await cotizadosStmt.get(a.id, from, to)).c,
+      pendientes: (await pendientesStmt.get(a.id, from, to)).c,
+    }))
+  );
 
-  const ventas = advisors.flatMap((a) =>
-    ventasStmt.all(a.id, from, to).map((l) => ({
+  const ventasByAdvisor = await Promise.all(advisors.map((a) => ventasStmt.all(a.id, from, to)));
+  const ventas = advisors.flatMap((a, idx) =>
+    ventasByAdvisor[idx].map((l) => ({
       id: l.id,
       fecha,
       advisor_id: a.id,
       advisor_name: a.name,
       cliente: l.client_name,
       monto: l.amount || 0,
+      created_at: l.closed_at,
+    }))
+  );
+
+  const declinadosByAdvisor = await Promise.all(advisors.map((a) => declinadosStmt.all(a.id, from, to)));
+  const declinados = advisors.flatMap((a, idx) =>
+    declinadosByAdvisor[idx].map((l) => ({
+      id: l.id,
+      fecha,
+      advisor_id: a.id,
+      advisor_name: a.name,
+      cliente: l.client_name,
       created_at: l.closed_at,
     }))
   );
@@ -69,27 +87,30 @@ router.get('/:fecha', (req, res) => {
   );
   totales.ventas_count = ventas.length;
   totales.ventas_total = ventas.reduce((s, v) => s + (v.monto || 0), 0);
+  totales.declinados_count = declinados.length;
 
-  const canalesRow = db.prepare('SELECT whatsapp, correo, llamadas FROM informe_canales WHERE fecha = ?').get(fecha);
+  const canalesRow = await db.prepare('SELECT whatsapp, correo, llamadas FROM informe_canales WHERE fecha = ?').get(fecha);
   const canales = canalesRow || { whatsapp: 0, correo: 0, llamadas: 0 };
 
-  res.json({ fecha, asesores, ventas, totales, canales });
+  res.json({ fecha, asesores, ventas, declinados, totales, canales });
 });
 
-router.put('/:fecha/canales', (req, res) => {
+router.put('/:fecha/canales', async (req, res) => {
   const { fecha } = req.params;
   if (!isValidFecha(fecha)) return res.status(400).json({ error: 'Fecha invalida (usa YYYY-MM-DD)' });
   const { whatsapp, correo, llamadas } = req.body || {};
   const toInt = (v) => Math.max(0, Math.trunc(Number(v)) || 0);
 
-  db.prepare(
-    `INSERT INTO informe_canales (fecha, whatsapp, correo, llamadas)
-     VALUES (?, ?, ?, ?)
-     ON CONFLICT(fecha) DO UPDATE SET
-       whatsapp = excluded.whatsapp,
-       correo = excluded.correo,
-       llamadas = excluded.llamadas`
-  ).run(fecha, toInt(whatsapp), toInt(correo), toInt(llamadas));
+  await db
+    .prepare(
+      `INSERT INTO informe_canales (fecha, whatsapp, correo, llamadas)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(fecha) DO UPDATE SET
+         whatsapp = excluded.whatsapp,
+         correo = excluded.correo,
+         llamadas = excluded.llamadas`
+    )
+    .run(fecha, toInt(whatsapp), toInt(correo), toInt(llamadas));
 
   broadcast('informe_changed', { fecha });
   res.json({ ok: true });

@@ -6,9 +6,9 @@ const { requireRole } = require('../middleware/auth');
 
 const router = express.Router();
 
-function serializeMeta(row) {
-  const user = row.generated_by ? db.prepare('SELECT username FROM users WHERE id = ?').get(row.generated_by) : null;
-  const advisor = row.advisor_id ? db.prepare('SELECT name FROM advisors WHERE id = ?').get(row.advisor_id) : null;
+async function serializeMeta(row) {
+  const user = row.generated_by ? await db.prepare('SELECT username FROM users WHERE id = ?').get(row.generated_by) : null;
+  const advisor = row.advisor_id ? await db.prepare('SELECT name FROM advisors WHERE id = ?').get(row.advisor_id) : null;
   return {
     id: row.id,
     type: row.type,
@@ -21,7 +21,7 @@ function serializeMeta(row) {
   };
 }
 
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
   const { type, advisor_id } = req.query;
   const conditions = [];
   const params = [];
@@ -34,20 +34,20 @@ router.get('/', (req, res) => {
     params.push(Number(advisor_id));
   }
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
-  const rows = db.prepare(`SELECT * FROM reports ${where} ORDER BY generated_at DESC`).all(...params);
-  res.json(rows.map(serializeMeta));
+  const rows = await db.prepare(`SELECT * FROM reports ${where} ORDER BY generated_at DESC`).all(...params);
+  res.json(await Promise.all(rows.map(serializeMeta)));
 });
 
-router.get('/:id', (req, res) => {
-  const row = db.prepare('SELECT * FROM reports WHERE id = ?').get(Number(req.params.id));
+router.get('/:id', async (req, res) => {
+  const row = await db.prepare('SELECT * FROM reports WHERE id = ?').get(Number(req.params.id));
   if (!row) return res.status(404).json({ error: 'Reporte no encontrado' });
-  res.json({ ...serializeMeta(row), data: JSON.parse(row.data) });
+  res.json({ ...(await serializeMeta(row)), data: JSON.parse(row.data) });
 });
 
 // Genera un snapshot con los datos ACTUALES del rango pedido y lo archiva.
 // Queda fijo desde ese momento (no se recalcula despues), a proposito: es el
 // registro historico que reemplaza la carpeta manual.
-router.post('/', (req, res) => {
+router.post('/', async (req, res) => {
   const { type, from, to, advisor_id } = req.body || {};
   if (!['rendimiento', 'rentabilidad', 'asesor'].includes(type)) {
     return res.status(400).json({ error: 'type debe ser "rendimiento", "rentabilidad" o "asesor"' });
@@ -56,34 +56,34 @@ router.post('/', (req, res) => {
   let data;
   let advisorId = null;
   if (type === 'rendimiento') {
-    data = reporting.computeFunnelReport(from, to);
+    data = await reporting.computeFunnelReport(from, to);
   } else if (type === 'rentabilidad') {
-    data = reporting.computeProfitabilityReport(from, to);
+    data = await reporting.computeProfitabilityReport(from, to);
   } else {
     if (!advisor_id) return res.status(400).json({ error: 'advisor_id es requerido para type "asesor"' });
-    data = reporting.computeAdvisorReport(advisor_id, from, to);
+    data = await reporting.computeAdvisorReport(advisor_id, from, to);
     if (!data) return res.status(404).json({ error: 'Asesor no encontrado' });
     advisorId = data.advisor.id;
   }
 
-  const info = db
+  const info = await db
     .prepare('INSERT INTO reports (type, period_from, period_to, advisor_id, generated_by, data) VALUES (?, ?, ?, ?, ?, ?)')
     .run(type, data.from, data.to, advisorId, req.user.id, JSON.stringify(data));
 
-  const row = db.prepare('SELECT * FROM reports WHERE id = ?').get(info.lastInsertRowid);
-  res.status(201).json({ ...serializeMeta(row), data });
+  const row = await db.prepare('SELECT * FROM reports WHERE id = ?').get(info.lastInsertRowid);
+  res.status(201).json({ ...(await serializeMeta(row)), data });
 });
 
-router.delete('/:id', requireRole('admin'), (req, res) => {
+router.delete('/:id', requireRole('admin'), async (req, res) => {
   const id = Number(req.params.id);
-  const row = db.prepare('SELECT id FROM reports WHERE id = ?').get(id);
+  const row = await db.prepare('SELECT id FROM reports WHERE id = ?').get(id);
   if (!row) return res.status(404).json({ error: 'Reporte no encontrado' });
-  db.prepare('DELETE FROM reports WHERE id = ?').run(id);
+  await db.prepare('DELETE FROM reports WHERE id = ?').run(id);
   res.json({ ok: true });
 });
 
-router.get('/:id/xlsx', (req, res) => {
-  const row = db.prepare('SELECT * FROM reports WHERE id = ?').get(Number(req.params.id));
+router.get('/:id/xlsx', async (req, res) => {
+  const row = await db.prepare('SELECT * FROM reports WHERE id = ?').get(Number(req.params.id));
   if (!row) return res.status(404).json({ error: 'Reporte no encontrado' });
   const data = JSON.parse(row.data);
   const wb = XLSX.utils.book_new();

@@ -33,9 +33,11 @@ export async function mount(container, ctx) {
           <span class="material-symbols-outlined text-primary">person_add</span>
         </div>
         <form id="alta-form" class="space-y-5">
-          <div>
+          <div class="relative">
             <label class="block text-label-bold font-label-bold text-on-surface-variant mb-1 uppercase tracking-wider">Nombre del Cliente *</label>
-            <input id="f-nombre" required type="text" placeholder="Ej. Juan Pérez" class="w-full p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none transition-all" />
+            <input id="f-nombre" required type="text" autocomplete="off" placeholder="Ej. Juan Pérez — escribe para buscar clientes existentes" class="w-full p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none transition-all" />
+            <div id="f-nombre-suggestions" class="hidden absolute z-20 mt-1 w-full bg-surface border border-outline-variant rounded-md shadow-lg max-h-56 overflow-y-auto"></div>
+            <p id="f-cliente-hint" class="hidden text-[11px] text-secondary mt-1 flex items-center gap-1"><span class="material-symbols-outlined text-[13px]">check_circle</span>Cliente existente vinculado — se sumará a su ficha en Clientes.</p>
           </div>
           <div class="grid grid-cols-2 gap-4">
             <div>
@@ -174,6 +176,7 @@ export async function mount(container, ctx) {
                 <th class="p-table-cell-padding text-label-bold font-label-bold text-on-surface-variant uppercase tracking-wider">Hora</th>
                 <th class="p-table-cell-padding text-label-bold font-label-bold text-on-surface-variant uppercase tracking-wider">Cliente</th>
                 <th class="p-table-cell-padding text-label-bold font-label-bold text-on-surface-variant uppercase tracking-wider">Asesor Actual</th>
+                <th class="p-table-cell-padding text-label-bold font-label-bold text-on-surface-variant uppercase tracking-wider">Predicción</th>
                 <th class="p-table-cell-padding text-label-bold font-label-bold text-on-surface-variant uppercase tracking-wider">Estado</th>
                 <th class="p-table-cell-padding text-label-bold font-label-bold text-on-surface-variant uppercase tracking-wider text-right">Acción Operativa</th>
               </tr>
@@ -193,6 +196,63 @@ export async function mount(container, ctx) {
   const productoSelect = container.querySelector('#f-producto');
   const productoOtro = container.querySelector('#f-producto-otro');
   const submitBtn = form ? form.querySelector('button[type="submit"]') : null;
+  const nombreInput = container.querySelector('#f-nombre');
+  const nombreSuggestions = container.querySelector('#f-nombre-suggestions');
+  const clienteHint = container.querySelector('#f-cliente-hint');
+  let selectedClientId = null;
+  let clienteSearchDebounce;
+
+  if (nombreInput) {
+    nombreInput.addEventListener('input', () => {
+      selectedClientId = null;
+      clienteHint.classList.add('hidden');
+      clearTimeout(clienteSearchDebounce);
+      const term = nombreInput.value.trim();
+      if (term.length < 2) {
+        nombreSuggestions.classList.add('hidden');
+        return;
+      }
+      clienteSearchDebounce = setTimeout(async () => {
+        let matches = [];
+        try {
+          matches = await ctx.api.get(`/api/clients?q=${encodeURIComponent(term)}`);
+        } catch {
+          return;
+        }
+        if (!matches.length) {
+          nombreSuggestions.classList.add('hidden');
+          return;
+        }
+        nombreSuggestions.innerHTML = matches
+          .slice(0, 6)
+          .map(
+            (c) => `
+          <button type="button" data-client-id="${c.id}" data-client-name="${escapeHtml(c.name)}" data-client-phone="${escapeHtml(c.phone || '')}" class="w-full text-left px-3 py-2 hover:bg-surface-container-low transition-colors flex items-center justify-between gap-2">
+            <span class="text-body-sm font-semibold text-on-surface truncate">${escapeHtml(c.name)}</span>
+            <span class="text-[11px] text-on-surface-variant shrink-0">${escapeHtml(c.phone || 'sin teléfono')} · ${c.lead_count} pedido${c.lead_count === 1 ? '' : 's'}</span>
+          </button>`
+          )
+          .join('');
+        nombreSuggestions.classList.remove('hidden');
+      }, 250);
+    });
+    nombreSuggestions.addEventListener('click', (e) => {
+      const btn = e.target.closest('button[data-client-id]');
+      if (!btn) return;
+      selectedClientId = Number(btn.dataset.clientId);
+      nombreInput.value = btn.dataset.clientName;
+      if (btn.dataset.clientPhone && btn.dataset.clientPhone !== 'Sin dato') {
+        container.querySelector('#f-telefono').value = btn.dataset.clientPhone;
+      }
+      nombreSuggestions.classList.add('hidden');
+      clienteHint.classList.remove('hidden');
+    });
+    document.addEventListener('click', (e) => {
+      if (!nombreInput.contains(e.target) && !nombreSuggestions.contains(e.target)) {
+        nombreSuggestions.classList.add('hidden');
+      }
+    });
+  }
 
   const tableWrap = container.querySelector('#ventas-table-wrap');
   const boardWrap = container.querySelector('#ventas-board-wrap');
@@ -235,8 +295,8 @@ export async function mount(container, ctx) {
   const filterFrom = container.querySelector('#filter-from');
   const filterTo = container.querySelector('#filter-to');
 
-  filterFrom.value = todayPrefix();
-  filterTo.value = todayPrefix();
+  filterFrom.value = '';
+  filterTo.value = '';
 
   if (canCreate) {
     productoSelect.addEventListener('change', () => {
@@ -323,10 +383,18 @@ export async function mount(container, ctx) {
       <tr class="hover:bg-surface-container-low/50 transition-colors">
         <td class="p-table-cell-padding text-body-md text-on-surface whitespace-nowrap">${timeLabel(lead.created_at)}</td>
         <td class="p-table-cell-padding">
-          <div class="text-body-md font-semibold text-on-surface">${escapeHtml(lead.client_name)}</div>
+          <div class="text-body-md font-semibold text-on-surface flex items-center gap-1.5">
+            ${escapeHtml(lead.client_name)}
+            ${lead.is_historical ? '<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-surface-variant text-on-surface-variant border border-outline-variant" title="Importado de un sistema anterior, sin alertas de seguimiento">Histórico</span>' : ''}
+          </div>
           <div class="text-body-sm text-on-surface-variant">${escapeHtml(lead.product || '—')} · ${escapeHtml(lead.source || '—')}${lead.channel_detail ? ` · ${escapeHtml(lead.channel_detail)}` : ''}${lead.city ? ` · ${escapeHtml(lead.city)}` : ''}</div>
         </td>
         <td class="p-table-cell-padding text-body-md text-on-surface">${escapeHtml(lead.advisor_name || 'Sin Asignar')}</td>
+        <td class="p-table-cell-padding text-right">
+          <span class="inline-flex items-center gap-2 px-2 py-1 rounded-full bg-surface-container-low text-body-sm font-bold ${lead.predicted_score >= 70 ? 'text-secondary' : lead.predicted_score >= 45 ? 'text-primary' : 'text-error'}">
+            ${lead.predicted_score}%
+          </span>
+        </td>
         <td class="p-table-cell-padding">${statusCell}</td>
         <td class="p-table-cell-padding text-right">${actionCell}</td>
       </tr>
@@ -366,7 +434,7 @@ export async function mount(container, ctx) {
     countBadge.textContent = `${allLeads.length} registro${allLeads.length === 1 ? '' : 's'}`;
     tbody.innerHTML = allLeads.length
       ? allLeads.map(rowHtml).join('')
-      : `<tr><td colspan="5" class="p-table-cell-padding py-10 text-center text-body-sm text-on-surface-variant">No hay leads que coincidan con los filtros.</td></tr>`;
+      : `<tr><td colspan="6" class="p-table-cell-padding py-10 text-center text-body-sm text-on-surface-variant">No hay leads que coincidan con los filtros.</td></tr>`;
     if (viewMode === 'board') renderLeadKanban(boardWrap, allLeads, ctx, load);
   }
 
@@ -419,7 +487,16 @@ export async function mount(container, ctx) {
       return;
     }
     try {
-      const lead = await ctx.api.post('/api/leads', { client_name, phone, document: document_, advisor_id, product, source, channel_detail, city, notes, created_at });
+      // Si no se eligio un cliente existente de las sugerencias, se crea uno
+      // nuevo con estos mismos datos -- asi todo lead que se registre de
+      // ahora en adelante queda vinculado a una ficha en Clientes, sin
+      // pedirle un paso extra a quien esta registrando.
+      let client_id = selectedClientId;
+      if (!client_id) {
+        const client = await ctx.api.post('/api/clients', { name: client_name, phone, document: document_ });
+        client_id = client.id;
+      }
+      const lead = await ctx.api.post('/api/leads', { client_name, phone, document: document_, advisor_id, product, source, channel_detail, city, notes, created_at, client_id });
       ctx.toast(`Registrado y asignado a ${lead.advisor_name}`, 'success');
       form.reset();
       productoSelect.value = PRODUCTS[0];
@@ -429,6 +506,8 @@ export async function mount(container, ctx) {
       container.querySelector('#f-origen').value = DEFAULT_CHANNEL_DETAIL;
       container.querySelector('#f-ciudad').value = '';
       fechaWrap.classList.add('hidden');
+      selectedClientId = null;
+      clienteHint.classList.add('hidden');
       load();
     } catch (err) {
       ctx.toast(err.message, 'error');

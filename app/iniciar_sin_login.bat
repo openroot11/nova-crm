@@ -1,5 +1,5 @@
 @echo off
-title CRM Operativo Nova (SIN LOGIN - solo pruebas)
+title Nova CRM (SIN LOGIN - solo pruebas)
 cd /d "%~dp0server"
 
 if not exist node_modules (
