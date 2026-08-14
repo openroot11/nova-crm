@@ -54,6 +54,11 @@ async function main() {
 
   app.use('/api/auth', require('./routes/auth'));
 
+  // Sin sesion, antes del gate de abajo: lo usa el health check de hosting
+  // (Render, etc.), que pega sin cookie y necesita un 200 para no marcar el
+  // deploy como caido.
+  app.get('/api/health', (req, res) => res.json({ ok: true, at: new Date().toISOString() }));
+
   // Todo el resto de /api/* requiere sesion iniciada; loadUser ademas deja el
   // usuario (con su rol) disponible en req.user para los gates de cada ruta.
   app.use('/api', loadUser);
@@ -71,8 +76,6 @@ async function main() {
   app.use('/api/system', requireRole('admin'), require('./routes/system'));
   app.use('/api/informe', requireRole('admin', 'coordinador'), require('./routes/informe'));
   app.use('/api/users', requireRole('admin'), require('./routes/users'));
-
-  app.get('/api/health', (req, res) => res.json({ ok: true, at: new Date().toISOString() }));
 
   // Manejador de errores al final: cualquier error lanzado o promesa
   // rechazada dentro de una ruta (async o no) cae aqui en vez de tumbar el
