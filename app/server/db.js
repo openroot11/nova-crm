@@ -17,6 +17,16 @@ types.setTypeParser(20, (val) => parseInt(val, 10));
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: process.env.DATABASE_URL.includes('localhost') ? false : { rejectUnauthorized: false },
+  // Sin esto, una conexion nueva que no logra completar el handshake con el
+  // pooler de Supabase se queda colgada para siempre (pg no tiene timeout
+  // por defecto), y se come un cupo del pool hasta reiniciar el proceso --
+  // visto en produccion: unas requests respondian y otras quedaban "pending"
+  // eternamente. Con esto, esa conexion falla rapido y el cupo se libera.
+  connectionTimeoutMillis: 10_000,
+  // Igual para consultas que ya obtuvieron conexion pero nunca reciben
+  // respuesta del servidor (ej. el pooler acepta el TCP pero se cuelga a
+  // mitad de la query).
+  query_timeout: 15_000,
 });
 pool.on('error', (err) => console.error('Error inesperado en el pool de Postgres:', err));
 
