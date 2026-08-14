@@ -459,4 +459,53 @@ router.post('/:id/payments', async (req, res) => {
   res.status(201).json(payment);
 });
 
+// Editar el monto de una venta ya cerrada (ej. corregir un error de
+// digitacion o un ajuste acordado con el cliente). Restringido a
+// coordinador/admin igual que el resto de acciones administrativas de este
+// archivo -- es un dato financiero ya cerrado, no una accion operativa del
+// dia a dia del asesor.
+router.patch('/:id/amount', requireRole('coordinador', 'admin'), async (req, res) => {
+  const id = Number(req.params.id);
+  const lead = await db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
+  if (!lead) return res.status(404).json({ error: 'Lead no encontrado' });
+  if (lead.status !== 'cerrado_ganado') return res.status(409).json({ error: 'Solo se puede editar el monto de una venta cerrada' });
+  const amountNum = Number((req.body || {}).amount);
+  if (!Number.isFinite(amountNum) || amountNum < 0) return res.status(400).json({ error: 'amount debe ser un número válido' });
+  await db.prepare('UPDATE leads SET amount = ? WHERE id = ?').run(amountNum, id);
+  const updated = await db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
+  broadcast('leads_changed', { reason: 'amount_updated', id });
+  res.json(await serialize(updated));
+});
+
+// Editar/eliminar un abono puntual. Mismo criterio de permiso que /amount:
+// tocar un pago ya registrado es administrativo, no algo que un asesor haga
+// sobre la marcha (para eso ya esta POST /:id/payments).
+router.patch('/:id/payments/:paymentId', requireRole('coordinador', 'admin'), async (req, res) => {
+  const id = Number(req.params.id);
+  const paymentId = Number(req.params.paymentId);
+  const payment = await db.prepare('SELECT * FROM payments WHERE id = ? AND lead_id = ?').get(paymentId, id);
+  if (!payment) return res.status(404).json({ error: 'Abono no encontrado' });
+  const { amount, notes } = req.body || {};
+  const amountNum = amount !== undefined ? Number(amount) : payment.amount;
+  if (!amountNum || amountNum <= 0) return res.status(400).json({ error: 'amount debe ser mayor a 0' });
+  await db.prepare('UPDATE payments SET amount = ?, notes = ? WHERE id = ?').run(
+    amountNum,
+    notes !== undefined ? (notes.trim() || null) : payment.notes,
+    paymentId
+  );
+  const updated = await db.prepare('SELECT * FROM payments WHERE id = ?').get(paymentId);
+  broadcast('leads_changed', { reason: 'payment_updated', id });
+  res.json(updated);
+});
+
+router.delete('/:id/payments/:paymentId', requireRole('coordinador', 'admin'), async (req, res) => {
+  const id = Number(req.params.id);
+  const paymentId = Number(req.params.paymentId);
+  const payment = await db.prepare('SELECT * FROM payments WHERE id = ? AND lead_id = ?').get(paymentId, id);
+  if (!payment) return res.status(404).json({ error: 'Abono no encontrado' });
+  await db.prepare('DELETE FROM payments WHERE id = ?').run(paymentId);
+  broadcast('leads_changed', { reason: 'payment_deleted', id });
+  res.json({ ok: true });
+});
+
 module.exports = router;

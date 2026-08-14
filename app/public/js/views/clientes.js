@@ -1,5 +1,5 @@
 import { escapeHtml, formatMoney, statusBadge } from '../utils.js';
-import { openModal } from '../components/modal.js';
+import { openModal, confirmModal } from '../components/modal.js';
 
 const PAGE_SIZE = 50;
 // Mismo catalogo que Alta Rapida en ventas.js -- "Otro" se excluye del
@@ -139,6 +139,12 @@ export async function mount(container, ctx) {
   // scopedClientIds), asi que el filtro de asesor no le sirve de nada -- se
   // oculta igual que en ventas.js con canCreate/canReassign.
   if (ctx.user?.role === 'asesor') filterAsesorWrap.classList.add('hidden');
+
+  // Editar el monto de una venta cerrada o editar/eliminar un abono ya
+  // registrado es administrativo (mismo criterio que el backend en
+  // PATCH /api/leads/:id/amount y /:id/payments/:paymentId): un asesor solo
+  // puede registrar abonos nuevos, no tocar los que ya quedaron guardados.
+  const canEditMoney = ctx.user?.role === 'admin' || ctx.user?.role === 'coordinador';
 
   let allClients = [];
   let visibleCount = PAGE_SIZE;
@@ -304,13 +310,20 @@ export async function mount(container, ctx) {
     const paid = payments.filter((p) => p.lead_id === lead.id).reduce((s, p) => s + p.amount, 0);
     const saldo = (lead.amount || 0) - paid;
     const canPay = lead.status === 'cerrado_ganado' && lead.amount > 0;
+    const canEditAmount = canEditMoney && lead.status === 'cerrado_ganado';
+    const montoCell = canEditAmount
+      ? `<button data-edit-amount="${lead.id}" class="inline-flex items-center gap-1 hover:text-primary transition-colors group">
+           ${formatMoney(lead.amount)}
+           <span class="material-symbols-outlined text-[14px] opacity-0 group-hover:opacity-100 transition-opacity">edit</span>
+         </button>`
+      : formatMoney(lead.amount);
     return `
       <tr class="hover:bg-surface-container-low/50 transition-colors">
         <td class="p-2 text-on-surface-variant whitespace-nowrap">${escapeHtml((lead.created_at || '').slice(0, 10))}</td>
         <td class="p-2 text-on-surface">${escapeHtml(lead.product || '—')}</td>
         <td class="p-2 text-on-surface-variant">${escapeHtml(lead.advisor_name || '—')}</td>
         <td class="p-2"><span class="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold ${b.badgeClass}">${b.label}</span></td>
-        <td class="p-2 text-right font-bold">${formatMoney(lead.amount)}</td>
+        <td class="p-2 text-right font-bold">${montoCell}</td>
         <td class="p-2 text-right ${saldo > 0 ? 'text-error font-bold' : 'text-on-surface-variant'}">${canPay ? formatMoney(saldo) : '—'}</td>
         <td class="p-2 text-right">${canPay ? `<button data-pay="${lead.id}" class="text-primary hover:text-on-primary-fixed-variant text-[11px] font-label-bold border border-outline-variant rounded-md px-2 py-1">Registrar abono</button>` : ''}</td>
       </tr>
@@ -319,12 +332,23 @@ export async function mount(container, ctx) {
 
   function paymentRowHtml(p, leadsById) {
     const lead = leadsById.get(p.lead_id);
+    const actionsCell = canEditMoney
+      ? `<td class="p-2 text-right whitespace-nowrap">
+           <button data-edit-payment="${p.id}" data-lead-id="${p.lead_id}" class="text-on-surface-variant hover:text-primary p-1" title="Editar abono">
+             <span class="material-symbols-outlined text-[16px]">edit</span>
+           </button>
+           <button data-delete-payment="${p.id}" data-lead-id="${p.lead_id}" class="text-on-surface-variant hover:text-error p-1" title="Eliminar abono">
+             <span class="material-symbols-outlined text-[16px]">delete</span>
+           </button>
+         </td>`
+      : '';
     return `
       <tr>
         <td class="p-2 text-on-surface-variant whitespace-nowrap">${escapeHtml((p.paid_at || '').slice(0, 16).replace('T', ' '))}</td>
         <td class="p-2 text-on-surface">${escapeHtml(lead ? lead.product || 'Pedido' : 'Pedido')}</td>
         <td class="p-2 text-right font-bold text-secondary">${formatMoney(p.amount)}</td>
         <td class="p-2 text-on-surface-variant">${escapeHtml(p.notes || '—')}</td>
+        ${actionsCell}
       </tr>
     `;
   }
@@ -362,6 +386,92 @@ export async function mount(container, ctx) {
         });
       },
     });
+  }
+
+  function openEditAmountModal(lead, onDone) {
+    openModal({
+      title: `Editar monto · ${escapeHtml(lead.product || 'Pedido')}`,
+      render: (body, { close }) => {
+        body.innerHTML = `
+          <label class="block text-label-bold font-label-bold uppercase tracking-wide text-on-surface-variant mb-1">Monto (COP)</label>
+          <input id="amount-input" type="number" min="0" step="1000" value="${lead.amount || 0}" class="w-full p-2.5 border border-outline-variant rounded-md mb-4 outline-none focus:border-primary focus:ring-2 focus:ring-primary/20" />
+          <div class="flex justify-end gap-2">
+            <button id="amount-cancel" class="px-4 py-2 rounded-lg border border-outline-variant hover:bg-surface-container-low">Cancelar</button>
+            <button id="amount-ok" class="px-4 py-2 rounded-lg bg-primary text-on-primary font-bold hover:bg-on-primary-fixed-variant">Guardar</button>
+          </div>
+        `;
+        const input = body.querySelector('#amount-input');
+        input.focus();
+        body.querySelector('#amount-cancel').addEventListener('click', close);
+        body.querySelector('#amount-ok').addEventListener('click', async () => {
+          const amount = input.value;
+          if (amount === '' || Number(amount) < 0) {
+            ctx.toast('Ingresa un monto válido', 'error');
+            return;
+          }
+          try {
+            await ctx.api.patch(`/api/leads/${lead.id}/amount`, { amount });
+            ctx.toast('Monto actualizado', 'success');
+            close();
+            onDone?.();
+          } catch (err) {
+            ctx.toast(err.message, 'error');
+          }
+        });
+      },
+    });
+  }
+
+  function openEditPaymentModal(payment, onDone) {
+    openModal({
+      title: 'Editar abono',
+      render: (body, { close }) => {
+        body.innerHTML = `
+          <label class="block text-label-bold font-label-bold uppercase tracking-wide text-on-surface-variant mb-1">Monto (COP)</label>
+          <input id="pay-edit-amount" type="number" min="1" step="1000" value="${payment.amount}" class="w-full p-2.5 border border-outline-variant rounded-md mb-4 outline-none focus:border-primary focus:ring-2 focus:ring-primary/20" />
+          <label class="block text-label-bold font-label-bold uppercase tracking-wide text-on-surface-variant mb-1">Nota (opcional)</label>
+          <input id="pay-edit-notes" type="text" value="${escapeHtml(payment.notes || '')}" class="w-full p-2.5 border border-outline-variant rounded-md mb-4 outline-none focus:border-primary focus:ring-2 focus:ring-primary/20" />
+          <div class="flex justify-end gap-2">
+            <button id="pay-edit-cancel" class="px-4 py-2 rounded-lg border border-outline-variant hover:bg-surface-container-low">Cancelar</button>
+            <button id="pay-edit-ok" class="px-4 py-2 rounded-lg bg-primary text-on-primary font-bold hover:bg-on-primary-fixed-variant">Guardar</button>
+          </div>
+        `;
+        body.querySelector('#pay-edit-cancel').addEventListener('click', close);
+        body.querySelector('#pay-edit-ok').addEventListener('click', async () => {
+          const amount = body.querySelector('#pay-edit-amount').value;
+          const notes = body.querySelector('#pay-edit-notes').value.trim();
+          if (!amount || Number(amount) <= 0) {
+            ctx.toast('Ingresa un monto válido', 'error');
+            return;
+          }
+          try {
+            await ctx.api.patch(`/api/leads/${payment.lead_id}/payments/${payment.id}`, { amount, notes });
+            ctx.toast('Abono actualizado', 'success');
+            close();
+            onDone?.();
+          } catch (err) {
+            ctx.toast(err.message, 'error');
+          }
+        });
+      },
+    });
+  }
+
+  async function deletePayment(payment, onDone) {
+    const ok = await confirmModal({
+      title: 'Eliminar abono',
+      message: `¿Eliminar el abono de ${formatMoney(payment.amount)}? Esta acción no se puede deshacer.`,
+      confirmLabel: 'Eliminar',
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      await ctx.api.del(`/api/leads/${payment.lead_id}/payments/${payment.id}`);
+      ctx.toast('Abono eliminado', 'success');
+      onDone?.();
+    } catch (err) {
+      ctx.toast(err.message, 'error');
+    }
   }
 
   async function openFicha(id) {
@@ -436,10 +546,11 @@ export async function mount(container, ctx) {
                 <th class="p-2 text-label-bold font-label-bold text-on-surface-variant uppercase text-[10px]">Pedido</th>
                 <th class="p-2 text-label-bold font-label-bold text-on-surface-variant uppercase text-[10px] text-right">Monto</th>
                 <th class="p-2 text-label-bold font-label-bold text-on-surface-variant uppercase text-[10px]">Nota</th>
+                ${canEditMoney ? '<th class="p-2"></th>' : ''}
               </tr>
             </thead>
             <tbody id="ficha-payments-tbody" class="divide-y divide-outline-variant">
-              ${client.payments.length ? client.payments.map((p) => paymentRowHtml(p, leadsById)).join('') : `<tr><td colspan="4" class="p-4 text-center text-on-surface-variant">Sin abonos registrados.</td></tr>`}
+              ${client.payments.length ? client.payments.map((p) => paymentRowHtml(p, leadsById)).join('') : `<tr><td colspan="${canEditMoney ? 5 : 4}" class="p-4 text-center text-on-surface-variant">Sin abonos registrados.</td></tr>`}
             </tbody>
           </table>
         </div>
@@ -470,6 +581,24 @@ export async function mount(container, ctx) {
         if (lead) openPaymentModal(client, lead, () => openFicha(id));
       });
     });
+    fichaRoot.querySelectorAll('button[data-edit-amount]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const lead = leadsById.get(Number(btn.dataset.editAmount));
+        if (lead) openEditAmountModal(lead, () => openFicha(id));
+      });
+    });
+    fichaRoot.querySelectorAll('button[data-edit-payment]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const payment = client.payments.find((p) => p.id === Number(btn.dataset.editPayment));
+        if (payment) openEditPaymentModal(payment, () => openFicha(id));
+      });
+    });
+    fichaRoot.querySelectorAll('button[data-delete-payment]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const payment = client.payments.find((p) => p.id === Number(btn.dataset.deletePayment));
+        if (payment) deletePayment(payment, () => openFicha(id));
+      });
+    });
 
     fichaRoot.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
@@ -483,6 +612,12 @@ export async function mount(container, ctx) {
   refreshBtn.addEventListener('click', loadList);
   const offLeads = ctx.ws.on('leads_changed', loadList);
   await Promise.all([loadList(), loadAdvisorFilterOptions()]);
+
+  // Llegada desde otra vista (ej. Ventas Cerradas) pidiendo abrir un cliente
+  // puntual -- independiente del listado/filtros de arriba, la ficha se trae
+  // directo por id.
+  const openId = Number(ctx.routeParams?.get('open'));
+  if (openId) openFicha(openId);
 
   return () => offLeads();
 }

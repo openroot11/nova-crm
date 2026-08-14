@@ -1,4 +1,4 @@
-import { escapeHtml, slaBadge, statusBadge, STATUS_OPTIONS } from '../utils.js';
+import { escapeHtml, formatMoney, slaBadge, statusBadge, STATUS_OPTIONS } from '../utils.js';
 import { openAssignModal, openReassignModal, openCloseModal, markContacted, markQuoted } from '../components/leadActions.js';
 import { COLOMBIA_CITY_NAMES } from '../colombia-cities.js';
 import { renderLeadKanban } from '../components/leadKanban.js';
@@ -16,6 +16,12 @@ function todayPrefix() {
 function timeLabel(createdAt) {
   const d = new Date(createdAt.replace(' ', 'T') + 'Z');
   return d.toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' });
+}
+
+function fullDateTimeLabel(dt) {
+  if (!dt) return null;
+  const d = new Date(dt.replace(' ', 'T') + 'Z');
+  return d.toLocaleDateString('es-CO', { day: 'numeric', month: 'short', year: 'numeric' }) + ' · ' + d.toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' });
 }
 
 export async function mount(container, ctx) {
@@ -347,7 +353,50 @@ export async function mount(container, ctx) {
     if (allAdvisors.some((a) => String(a.id) === prevFilter)) filterAsesor.value = prevFilter;
   }
 
-  function rowHtml(lead) {
+  function detailFieldHtml(label, value) {
+    return `
+      <div>
+        <p class="text-[10px] font-label-bold text-on-surface-variant/70 uppercase tracking-wider mb-0.5">${label}</p>
+        <p class="text-body-sm text-on-surface">${value}</p>
+      </div>`;
+  }
+
+  // Panel sutil que se abre justo debajo de la fila seleccionada -- no es un
+  // modal ni tapa nada, solo agrega una franja con los datos que no caben en
+  // las columnas de la tabla (contacto, fechas del embudo, notas).
+  function detailRowHtml(lead) {
+    const closed = lead.status.startsWith('cerrado');
+    const fields = [
+      detailFieldHtml('Teléfono', escapeHtml(lead.phone || '—')),
+      detailFieldHtml('Documento', escapeHtml(lead.document || '—')),
+      detailFieldHtml('Ciudad', escapeHtml(lead.city || '—')),
+      detailFieldHtml('Canal', escapeHtml(lead.source || '—') + (lead.channel_detail ? ` · ${escapeHtml(lead.channel_detail)}` : '')),
+      detailFieldHtml('Registrado', fullDateTimeLabel(lead.created_at) || '—'),
+    ];
+    if (lead.quoted_at) fields.push(detailFieldHtml('Cotizado', fullDateTimeLabel(lead.quoted_at)));
+    if (closed) {
+      fields.push(detailFieldHtml('Cerrado', fullDateTimeLabel(lead.closed_at) || '—'));
+      if (lead.status === 'cerrado_ganado') {
+        fields.push(detailFieldHtml('Monto', formatMoney(lead.amount || 0)));
+      }
+    }
+    return `
+      <tr class="bg-surface-container-lowest/60">
+        <td></td>
+        <td colspan="5" class="p-table-cell-padding pt-0">
+          <div class="border-l-2 border-outline-variant pl-4 ml-1 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-x-6 gap-y-3">
+            ${fields.join('')}
+          </div>
+          ${lead.notes ? `
+          <div class="border-l-2 border-outline-variant pl-4 ml-1 mt-3">
+            <p class="text-[10px] font-label-bold text-on-surface-variant/70 uppercase tracking-wider mb-0.5">Notas</p>
+            <p class="text-body-sm text-on-surface-variant">${escapeHtml(lead.notes)}</p>
+          </div>` : ''}
+        </td>
+      </tr>`;
+  }
+
+  function rowHtml(lead, expanded) {
     const closed = lead.status.startsWith('cerrado');
     let statusCell;
     if (closed) {
@@ -380,10 +429,11 @@ export async function mount(container, ctx) {
     }
 
     return `
-      <tr class="hover:bg-surface-container-low/50 transition-colors">
+      <tr data-lead-row="${lead.id}" class="hover:bg-surface-container-low/50 transition-colors cursor-pointer ${expanded ? 'bg-surface-container-low/40' : ''}">
         <td class="p-table-cell-padding text-body-md text-on-surface whitespace-nowrap">${timeLabel(lead.created_at)}</td>
         <td class="p-table-cell-padding">
           <div class="text-body-md font-semibold text-on-surface flex items-center gap-1.5">
+            <span class="material-symbols-outlined text-[16px] text-on-surface-variant/50 transition-transform ${expanded ? 'rotate-90' : ''}">chevron_right</span>
             ${escapeHtml(lead.client_name)}
             ${lead.is_historical ? '<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-surface-variant text-on-surface-variant border border-outline-variant" title="Importado de un sistema anterior, sin alertas de seguimiento">Histórico</span>' : ''}
           </div>
@@ -403,6 +453,9 @@ export async function mount(container, ctx) {
 
   let allLeads = [];
   let searchQuery = '';
+  // Fila(s) con el panel de detalle abierto -- vive aparte de allLeads para
+  // que expandir/colapsar sea puramente local (no dispara un fetch).
+  const expandedIds = new Set();
 
   function buildQuery() {
     const params = new URLSearchParams();
@@ -424,6 +477,12 @@ export async function mount(container, ctx) {
     return qs ? `?${qs}` : '';
   }
 
+  function renderRows() {
+    tbody.innerHTML = allLeads.length
+      ? allLeads.map((lead) => rowHtml(lead, expandedIds.has(lead.id)) + (expandedIds.has(lead.id) ? detailRowHtml(lead) : '')).join('')
+      : `<tr><td colspan="6" class="p-table-cell-padding py-10 text-center text-body-sm text-on-surface-variant">No hay leads que coincidan con los filtros.</td></tr>`;
+  }
+
   async function load() {
     try {
       allLeads = await ctx.api.get(`/api/leads${buildQuery()}`);
@@ -432,22 +491,28 @@ export async function mount(container, ctx) {
       return;
     }
     countBadge.textContent = `${allLeads.length} registro${allLeads.length === 1 ? '' : 's'}`;
-    tbody.innerHTML = allLeads.length
-      ? allLeads.map(rowHtml).join('')
-      : `<tr><td colspan="6" class="p-table-cell-padding py-10 text-center text-body-sm text-on-surface-variant">No hay leads que coincidan con los filtros.</td></tr>`;
+    renderRows();
     if (viewMode === 'board') renderLeadKanban(boardWrap, allLeads, ctx, load);
   }
 
   tbody.addEventListener('click', (e) => {
     const btn = e.target.closest('button[data-action]');
-    if (!btn) return;
-    const lead = allLeads.find((l) => l.id === Number(btn.dataset.id));
-    if (!lead) return;
-    if (btn.dataset.action === 'assign') openAssignModal(lead, ctx, load);
-    if (btn.dataset.action === 'reassign') openReassignModal(lead, ctx, load);
-    if (btn.dataset.action === 'close') openCloseModal(lead, ctx, load);
-    if (btn.dataset.action === 'contact') markContacted(lead, ctx, load);
-    if (btn.dataset.action === 'quote') markQuoted(lead, ctx, load);
+    if (btn) {
+      const lead = allLeads.find((l) => l.id === Number(btn.dataset.id));
+      if (!lead) return;
+      if (btn.dataset.action === 'assign') openAssignModal(lead, ctx, load);
+      if (btn.dataset.action === 'reassign') openReassignModal(lead, ctx, load);
+      if (btn.dataset.action === 'close') openCloseModal(lead, ctx, load);
+      if (btn.dataset.action === 'contact') markContacted(lead, ctx, load);
+      if (btn.dataset.action === 'quote') markQuoted(lead, ctx, load);
+      return;
+    }
+    const row = e.target.closest('tr[data-lead-row]');
+    if (!row) return;
+    const id = Number(row.dataset.leadRow);
+    if (expandedIds.has(id)) expandedIds.delete(id);
+    else expandedIds.add(id);
+    renderRows();
   });
 
   container.querySelector('#refresh-btn').addEventListener('click', load);

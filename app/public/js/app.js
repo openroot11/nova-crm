@@ -113,9 +113,11 @@ const ctx = {
   toast,
   user,
   search: searchBus,
-  navigate: (route) => {
-    location.hash = `#/${route}`;
+  navigate: (route, params) => {
+    const qs = params ? `?${new URLSearchParams(params).toString()}` : '';
+    location.hash = `#/${route}${qs}`;
   },
+  routeParams: new URLSearchParams(),
 };
 
 const globalSearchInput = document.getElementById('global-search');
@@ -128,8 +130,10 @@ globalSearchInput.addEventListener('input', () => {
 let currentUnmount = null;
 
 async function render() {
-  const hash = location.hash.replace('#/', '') || DEFAULT_ROUTE;
-  const route = routes[hash] && allowedRoutes.includes(hash) ? hash : DEFAULT_ROUTE;
+  const rawHash = location.hash.replace('#/', '') || DEFAULT_ROUTE;
+  const [hashRoute, hashQuery = ''] = rawHash.split('?');
+  const route = routes[hashRoute] && allowedRoutes.includes(hashRoute) ? hashRoute : DEFAULT_ROUTE;
+  ctx.routeParams = new URLSearchParams(route === hashRoute ? hashQuery : '');
 
   document.querySelectorAll('.nav-link').forEach((el) => {
     const active = el.dataset.route === route;

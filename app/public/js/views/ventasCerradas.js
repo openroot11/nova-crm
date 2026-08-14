@@ -1,6 +1,7 @@
 import { escapeHtml, formatMoney } from '../utils.js';
 import { barChart, destroyChart, CATEGORICAL_COLORS } from '../components/charts.js';
 import { openQuickSaleModal } from '../components/quickSaleModal.js';
+import { kpiTile } from '../components/kpiTile.js';
 
 const PAGE_SIZE = 50;
 
@@ -34,6 +35,8 @@ export async function mount(container, ctx) {
         </button>
       </div>
     </div>
+
+    <div id="vc-kpis" class="grid grid-cols-1 sm:grid-cols-2 gap-gutter mb-gutter"></div>
 
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-gutter mb-gutter">
       <div class="lg:col-span-2 bg-surface-container-lowest border border-outline-variant rounded-xl p-gutter shadow-sm flex flex-col">
@@ -76,6 +79,7 @@ export async function mount(container, ctx) {
 
   const fromInput = container.querySelector('#vc-from');
   const toInput = container.querySelector('#vc-to');
+  const kpisEl = container.querySelector('#vc-kpis');
   const trendCanvas = container.querySelector('#vc-trend-chart');
   const advisorCanvas = container.querySelector('#vc-advisor-chart');
   const tbody = container.querySelector('#vc-tbody');
@@ -94,10 +98,18 @@ export async function mount(container, ctx) {
     return params;
   }
 
+  function clientCellHtml(lead) {
+    if (!lead.client_id) return escapeHtml(lead.client_name);
+    return `
+      <button data-action="open-client" data-client-id="${lead.client_id}" class="hover:text-primary hover:underline transition-colors text-left">
+        ${escapeHtml(lead.client_name)}
+      </button>`;
+  }
+
   function rowHtml(lead) {
     return `
       <tr class="hover:bg-surface-container-low transition-colors">
-        <td class="p-table-cell-padding font-bold">${escapeHtml(lead.client_name)}</td>
+        <td class="p-table-cell-padding font-bold">${clientCellHtml(lead)}</td>
         <td class="p-table-cell-padding text-on-surface-variant">${escapeHtml(lead.advisor_name || '—')}</td>
         <td class="p-table-cell-padding text-on-surface-variant">${escapeHtml(lead.product || '—')}</td>
         <td class="p-table-cell-padding text-right font-bold text-secondary">${formatMoney(lead.amount || 0)}</td>
@@ -114,6 +126,15 @@ export async function mount(container, ctx) {
     const remaining = ventas.length - shown.length;
     loadmoreWrap.classList.toggle('hidden', remaining <= 0);
     if (remaining > 0) loadmoreInfo.textContent = `Mostrando ${shown.length} de ${ventas.length} · quedan ${remaining} más`;
+  }
+
+  function renderKpis() {
+    const total = ventas.reduce((s, l) => s + (l.amount || 0), 0);
+    const promedio = ventas.length ? total / ventas.length : 0;
+    kpisEl.innerHTML = [
+      kpiTile('Total vendido', formatMoney(total), `${ventas.length} venta${ventas.length === 1 ? '' : 's'} en el rango`, 'payments', 'text-secondary'),
+      kpiTile('Ticket promedio', formatMoney(promedio), 'Monto promedio por venta', 'receipt_long'),
+    ].join('');
   }
 
   async function loadTrend() {
@@ -170,6 +191,7 @@ export async function mount(container, ctx) {
     }
     ventas.sort((a, b) => (a.closed_at < b.closed_at ? 1 : -1));
     renderTable();
+    renderKpis();
   }
 
   async function loadAll() {
@@ -183,6 +205,15 @@ export async function mount(container, ctx) {
 
   fromInput.addEventListener('change', loadAll);
   toInput.addEventListener('change', loadAll);
+
+  tbody.addEventListener('click', (e) => {
+    const clientBtn = e.target.closest('button[data-action="open-client"]');
+    if (!clientBtn) return;
+    // Se manda a la ficha del cliente (Clientes) en vez de abrir un modal
+    // aqui: ahi es donde ya existe la edicion de datos/montos y el
+    // historial de abonos, no hace falta duplicarlo en esta vista.
+    ctx.navigate('clientes', { open: clientBtn.dataset.clientId });
+  });
 
   container.querySelector('#btn-quick-sale').addEventListener('click', () => {
     openQuickSaleModal(ctx, () => loadAll());
