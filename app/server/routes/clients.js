@@ -31,6 +31,50 @@ async function withAggregates(client) {
   };
 }
 
+// Misma agregacion que withAggregates(), pero para TODA una lista de
+// clientes en 2 consultas (una de leads, una de payments) en vez de 2 por
+// cliente -- con miles de clientes, Promise.all(clients.map(withAggregates))
+// pide miles de conexiones simultaneas al pool de Postgres (10 por defecto)
+// y el resto de la app empieza a fallar con "timeout exceeded when trying
+// to connect". Usado solo en GET '/' (la lista); GET '/:id' sigue usando
+// withAggregates() de a uno, que para un solo cliente no tiene ese problema.
+async function withAggregatesForList(clients) {
+  if (clients.length === 0) return [];
+  const clientIds = clients.map((c) => c.id);
+  const leadRows = await db
+    .prepare(`SELECT id, client_id, status, amount FROM leads WHERE client_id IN (${clientIds.map(() => '?').join(',')})`)
+    .all(...clientIds);
+
+  const leadsByClient = new Map();
+  for (const l of leadRows) {
+    if (!leadsByClient.has(l.client_id)) leadsByClient.set(l.client_id, []);
+    leadsByClient.get(l.client_id).push(l);
+  }
+
+  const wonLeadIds = leadRows.filter((l) => l.status === 'cerrado_ganado').map((l) => l.id);
+  const paidByLead = new Map();
+  if (wonLeadIds.length) {
+    const paymentRows = await db
+      .prepare(`SELECT lead_id, COALESCE(SUM(amount), 0) AS s FROM payments WHERE lead_id IN (${wonLeadIds.map(() => '?').join(',')}) GROUP BY lead_id`)
+      .all(...wonLeadIds);
+    paymentRows.forEach((r) => paidByLead.set(r.lead_id, r.s));
+  }
+
+  return clients.map((client) => {
+    const leads = leadsByClient.get(client.id) || [];
+    const wonLeads = leads.filter((l) => l.status === 'cerrado_ganado');
+    const total_comprado = wonLeads.reduce((s, l) => s + (l.amount || 0), 0);
+    const total_abonado = wonLeads.reduce((s, l) => s + (paidByLead.get(l.id) || 0), 0);
+    return {
+      ...client,
+      lead_count: leads.length,
+      total_comprado,
+      total_abonado,
+      saldo_pendiente: total_comprado - total_abonado,
+    };
+  });
+}
+
 async function findClientByValue(field, value, excludeId = null) {
   if (!value) return null;
   const query = `SELECT * FROM clients WHERE ${field} = ?${excludeId ? ' AND id != ?' : ''} LIMIT 1`;
@@ -55,7 +99,7 @@ router.get('/', async (req, res) => {
   if (from) clients = clients.filter((c) => c.created_at >= `${from} 00:00:00`);
   if (to) clients = clients.filter((c) => c.created_at <= `${to} 23:59:59`);
 
-  let result = await Promise.all(clients.map(withAggregates));
+  let result = await withAggregatesForList(clients);
 
   // Asesor/producto no viven en clients directamente (son de sus leads), asi
   // que se filtran por quien tiene al menos un lead que cumpla, igual

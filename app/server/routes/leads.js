@@ -88,9 +88,18 @@ function predictLeadScore(lead, advisorRate = 0) {
   return score;
 }
 
-async function serialize(lead, advisorRate = 0) {
+async function serialize(lead, advisorRate = 0, advisorsById = null) {
+  // advisorsById permite pasar un Map pre-cargado (ver GET '/' abajo) para
+  // evitar una consulta a advisors POR CADA lead: con Postgres remoto, N
+  // leads en Promise.all significan N conexiones simultaneas pidiendose al
+  // pool (10 por defecto) -- con cientos/miles de leads eso agota el pool y
+  // el resto de la app empieza a fallar con "timeout exceeded when trying
+  // to connect". Sin advisorsById (casos de un solo lead) se resuelve como
+  // antes, con una consulta individual.
   const advisor = lead.assigned_advisor_id
-    ? await db.prepare('SELECT id, name, is_group FROM advisors WHERE id = ?').get(lead.assigned_advisor_id)
+    ? advisorsById
+      ? advisorsById.get(lead.assigned_advisor_id) || null
+      : await db.prepare('SELECT id, name, is_group FROM advisors WHERE id = ?').get(lead.assigned_advisor_id)
     : null;
   return {
     ...lead,
@@ -194,7 +203,12 @@ router.get('/', async (req, res) => {
   const avgAdvisorRate = totalLeads ? totalWon / totalLeads : 0.15;
 
   const rows = await db.prepare(`SELECT * FROM leads ${where} ORDER BY created_at DESC`).all(...params);
-  let serialized = await Promise.all(rows.map((row) => serialize(row, advisorRates.get(row.assigned_advisor_id) ?? avgAdvisorRate)));
+  const advisorsById = new Map(
+    (await db.prepare('SELECT id, name, is_group FROM advisors').all()).map((a) => [a.id, a])
+  );
+  let serialized = await Promise.all(
+    rows.map((row) => serialize(row, advisorRates.get(row.assigned_advisor_id) ?? avgAdvisorRate, advisorsById))
+  );
   if (critical_only === '1') {
     serialized = serialized.filter((l) => l.sla_status === 'riesgo' || l.sla_status === 'vencido');
   }
