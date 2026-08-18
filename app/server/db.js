@@ -206,7 +206,8 @@ CREATE TABLE IF NOT EXISTS leads (
   followup_count INTEGER NOT NULL DEFAULT 0,
   city TEXT,
   is_historical BOOLEAN NOT NULL DEFAULT false,
-  client_id INTEGER REFERENCES clients(id)
+  client_id INTEGER REFERENCES clients(id),
+  sale_reference TEXT
 );
 
 CREATE TABLE IF NOT EXISTS reassignments (
