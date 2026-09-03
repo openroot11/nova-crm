@@ -25,3 +25,6 @@ _ads_pdfs/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Scripts de prueba/diagnóstico temporales
+server/_*.js
