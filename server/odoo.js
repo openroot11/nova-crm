@@ -336,25 +336,53 @@ async function updateQuotationLines(id, lines) {
 // ---------------------------------------------------------------------------
 //  Etapas del pipeline (crm.stage) -- mantener Odoo al dia con el embudo Nova
 // ---------------------------------------------------------------------------
-const _stageCache = new Map(); // nombre(lower) -> id
+// Cada Odoo puede nombrar sus etapas distinto (Asignado/Contactado/Cotizado vs
+// New/Qualified/Proposition...). El nombre de cada etapa que le corresponde a
+// un paso del embudo Nova se configura en server/.env; por defecto usa los
+// nombres en español del Odoo local. La etapa "ganada" se detecta por is_won,
+// no por nombre.
+const STAGE_NAMES = {
+  assigned: process.env.ODOO_STAGE_ASSIGNED || 'Asignado',
+  contacted: process.env.ODOO_STAGE_CONTACTED || 'Contactado',
+  quoted: process.env.ODOO_STAGE_QUOTED || 'Cotizado',
+  won: process.env.ODOO_STAGE_WON || 'Ganado',
+};
+
+function stageNames() {
+  return { ...STAGE_NAMES };
+}
+
+const _stageCache = new Map(); // clave -> id
 
 async function _stageIdByName(name) {
-  const key = String(name || '').trim().toLowerCase();
+  const key = 'name:' + String(name || '').trim().toLowerCase();
   if (!key) return null;
   if (_stageCache.has(key)) return _stageCache.get(key);
-  const ids = await callKw('crm.stage', 'search', [[['name', '=ilike', name.trim()]]], { limit: 1 });
+  const ids = await callKw('crm.stage', 'search', [[['name', '=ilike', String(name).trim()]]], { limit: 1 });
   const id = ids.length ? ids[0] : null;
   _stageCache.set(key, id);
   return id;
 }
 
-// Mueve la oportunidad a una etapa por nombre ('Asignado' | 'Contactado' |
-// 'Cotizado' | 'Ganado'). Best-effort: si la etapa no existe o el id es
-// invalido, no lanza -- el CRM sigue siendo la fuente de verdad del embudo.
-async function moveOpportunityStage(opportunityId, stageName) {
+async function _stageIdForKey(stageKey) {
+  if (stageKey === 'won') {
+    if (_stageCache.has('won')) return _stageCache.get('won');
+    let ids = await callKw('crm.stage', 'search', [[['is_won', '=', true]]], { limit: 1 });
+    if (!ids.length) ids = await callKw('crm.stage', 'search', [[['name', '=ilike', STAGE_NAMES.won]]], { limit: 1 });
+    const id = ids.length ? ids[0] : null;
+    _stageCache.set('won', id);
+    return id;
+  }
+  return _stageIdByName(STAGE_NAMES[stageKey] || stageKey);
+}
+
+// Mueve la oportunidad al paso del embudo indicado ('assigned' | 'contacted' |
+// 'quoted' | 'won'). Best-effort: si no encuentra la etapa, no lanza -- el CRM
+// sigue siendo la fuente de verdad del embudo.
+async function moveOpportunityStage(opportunityId, stageKey) {
   if (!opportunityId) return { moved: false };
-  const stageId = await _stageIdByName(stageName);
-  if (!stageId) return { moved: false, reason: `etapa "${stageName}" no encontrada` };
+  const stageId = await _stageIdForKey(stageKey);
+  if (!stageId) return { moved: false, reason: `no se encontró la etapa para "${stageKey}" en Odoo` };
   await callKw('crm.lead', 'write', [[opportunityId], { stage_id: stageId }]);
   return { moved: true, stage_id: stageId };
 }
@@ -392,6 +420,7 @@ module.exports = {
   resolveSalesperson,
   resolveAdvisorTeam,
   setOpportunityOwner,
+  stageNames,
   findOrCreatePartner,
   createLead,
   listProducts,

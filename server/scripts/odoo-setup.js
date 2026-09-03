@@ -1,21 +1,24 @@
-// Configuracion inicial de Odoo para Nova CRM (se corre UNA vez, a mano):
+// Configuracion inicial de Odoo para Nova CRM (se corre a mano):
 //
 //   cd server
+//   node scripts/odoo-setup.js --check    # SOLO inspecciona, no cambia nada
+//   node scripts/odoo-setup.js --dry-run  # muestra que cambiaria
 //   node scripts/odoo-setup.js            # aplica los cambios
-//   node scripts/odoo-setup.js --dry-run  # solo muestra que cambiaria
 //
-// Deja el Odoo local listo para emitir cotizaciones correctas desde Nova CRM:
+// Deja el Odoo (el que apunte server/.env) listo para el CRM:
 //   - Moneda de la compania -> COP (para que el PDF salga en pesos).
 //   - Impuesto de venta -> IVA 19% (Colombia), aplicado a los productos.
-//   - Equipo de ventas "Ventas Nova" con los 3 asesores como miembros.
+//   - Un equipo de ventas por asesor (Harol/Oscar/Roberto); "Ventas Nova" general.
 //
-// Es idempotente: si algo ya esta como debe, lo deja igual y lo reporta.
-// NO importa la lista de precios ni toca la contabilidad (no hay facturas).
+// Es idempotente. NO importa la lista de precios ni toca la contabilidad.
+// Con --check no escribe NADA -- sirve para revisar un Odoo nuevo (ej. el
+// hospedado) antes de decidir que ajustar.
 
 require('dotenv').config();
 const odoo = require('../odoo');
 
-const DRY_RUN = process.argv.includes('--dry-run');
+const CHECK_ONLY = process.argv.includes('--check');
+const DRY_RUN = process.argv.includes('--dry-run') || CHECK_ONLY;
 const TARGET_CURRENCY = 'COP';
 const TARGET_TAX_NAME = 'IVA 19%';
 const TARGET_TAX_AMOUNT = 19;
@@ -201,15 +204,62 @@ async function ensureSalesTeams() {
   }
 }
 
+// Inventario de solo lectura del Odoo conectado -- para revisar un servidor
+// nuevo antes de tocar nada.
+async function inspect() {
+  const [co] = await odoo.callKw('res.company', 'search_read', [[]], { fields: ['name', 'currency_id', 'country_id', 'account_sale_tax_id'] });
+  step('Compañía');
+  log(`  ${co.name} · país ${co.country_id ? co.country_id[1] : '—'} · moneda ${co.currency_id ? co.currency_id[1] : '—'}`);
+  log(`  IVA de venta por defecto: ${co.account_sale_tax_id ? co.account_sale_tax_id[1] : '—'}`);
+
+  step('Módulos (crm / sale / account / l10n_co)');
+  const mods = await odoo.callKw('ir.module.module', 'search_read',
+    [[['name', 'in', ['crm', 'sale', 'sale_management', 'account', 'l10n_co', 'l10n_co_edi']]]], { fields: ['name', 'state'] });
+  log('  ' + mods.map((m) => `${m.name}=${m.state}`).join(', '));
+
+  step('Etapas del CRM (crm.stage)  <- clave para el sync');
+  const stages = await odoo.callKw('crm.stage', 'search_read', [[]], { fields: ['name', 'sequence', 'is_won'], order: 'sequence' });
+  stages.forEach((s) => log(`  seq ${String(s.sequence).padStart(3)}  ${s.name}${s.is_won ? '   (GANADO/is_won)' : ''}`));
+
+  step('Equipos de ventas (crm.team)');
+  const teams = await odoo.callKw('crm.team', 'search_read', [[]], { fields: ['name', 'user_id'] });
+  teams.forEach((t) => log(`  ${t.name}${t.user_id ? `  (líder: ${t.user_id[1]})` : ''}`));
+
+  step('Usuarios internos (posibles asesores)');
+  const users = await odoo.callKw('res.users', 'search_read', [[['share', '=', false]]], { fields: ['name', 'login'] });
+  users.forEach((u) => log(`  ${u.name}  <${u.login}>`));
+
+  step('Impuestos de venta');
+  const taxes = await odoo.callKw('account.tax', 'search_read', [[['type_tax_use', '=', 'sale']]], { fields: ['name', 'amount'], context: { active_test: false } });
+  taxes.forEach((t) => log(`  ${t.name}  (${t.amount}%)`));
+
+  step('Productos vendibles');
+  const pc = await odoo.callKw('product.product', 'search_count', [[['sale_ok', '=', true]]]);
+  log(`  ${pc} producto(s) con "puede venderse"`);
+
+  step('Tarifas / listas de precios (product.pricelist)');
+  const pls = await odoo.callKw('product.pricelist', 'search_read', [[]], { fields: ['name', 'currency_id'], context: { active_test: false } });
+  pls.forEach((p) => log(`  ${p.name}  (${p.currency_id ? p.currency_id[1] : '—'})`));
+
+  log('\n--- Fin de la inspección. No se cambió nada. ---');
+  log('Pásale esta salida a Claude para ajustar la sincronización.');
+}
+
 async function main() {
   if (!odoo.isEnabled()) {
-    console.error('Odoo no está configurado (revisa server/.env: ODOO_URL, ODOO_DB, ODOO_USER, ODOO_PASSWORD).');
+    console.error('Odoo no está configurado (revisa server/.env: ODOO_URL, ODOO_DB, ODOO_USER, ODOO_PASSWORD/ODOO_API_KEY).');
     process.exit(1);
   }
-  log(DRY_RUN ? '*** MODO SIMULACIÓN (--dry-run): no se escribe nada en Odoo ***' : '*** Aplicando cambios en Odoo ***');
   const info = await odoo.ping();
   log(`Conectado a ${info.url} · base ${info.db} · ${info.company} · usuario ${info.user}`);
 
+  if (CHECK_ONLY) {
+    log('\n*** MODO INSPECCIÓN (--check): NO se escribe nada ***');
+    await inspect();
+    return;
+  }
+
+  log(DRY_RUN ? '\n*** MODO SIMULACIÓN (--dry-run): no se escribe nada en Odoo ***' : '\n*** Aplicando cambios en Odoo ***');
   await ensureCurrencyCOP();
   await ensureSaleTax19();
   await ensureSalesTeams();

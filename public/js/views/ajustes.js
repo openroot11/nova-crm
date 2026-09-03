@@ -211,7 +211,39 @@ export async function mount(container, ctx) {
         ${odooRow('Empresa', s.company)}
         ${odooRow('Usuario', `${s.user || ''}${s.login ? ` (${s.login})` : ''}`)}
       </div>
+      <div id="odoo-stages" class="mt-3"></div>
       <p class="mt-3 text-[11px] text-on-surface-variant">El CRM revisa Odoo cada ~30&nbsp;s y <strong>avanza</strong> el lead cuando la oportunidad pasa a Contactado, Cotizado o Perdido en Odoo. Retroceder una tarjeta en Odoo no retrocede el CRM; "Ganado" se cierra desde el CRM.</p>`;
+    loadOdooStages();
+  }
+
+  async function loadOdooStages() {
+    const el = container.querySelector('#odoo-stages');
+    if (!el) return;
+    let d;
+    try {
+      d = await ctx.api.get('/api/odoo/stages');
+    } catch {
+      return;
+    }
+    const chip = (mapsTo) =>
+      mapsTo
+        ? `<span class="text-[10px] px-1.5 py-0.5 rounded bg-secondary-container text-on-secondary-container">→ ${escapeHtml(mapsTo)}</span>`
+        : `<span class="text-[10px] px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant">sin uso en el CRM</span>`;
+    el.innerHTML = `
+      ${
+        d.mapping_ok
+          ? ''
+          : `<p class="mb-2 text-[11px] text-error font-semibold flex items-start gap-1"><span class="material-symbols-outlined text-[13px]">warning</span>El CRM no reconoce las etapas "${escapeHtml(d.expected.contacted)}" / "${escapeHtml(d.expected.quoted)}" en este Odoo. Ajusta ODOO_STAGE_* en server/.env.</p>`
+      }
+      <p class="text-[10px] font-label-bold text-on-surface-variant uppercase tracking-wider mb-1">Etapas del pipeline de Odoo</p>
+      <div class="flex flex-wrap gap-1.5">
+        ${d.stages
+          .map(
+            (st) =>
+              `<span class="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded border border-outline-variant">${escapeHtml(st.name)}${st.is_won ? ' 🏆' : ''} ${chip(st.maps_to)}</span>`
+          )
+          .join('')}
+      </div>`;
   }
 
   odooTestBtn.addEventListener('click', async () => {

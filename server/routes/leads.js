@@ -187,12 +187,12 @@ async function syncLeadToOdoo(leadId) {
 // Mantener el pipeline de Odoo al dia con el embudo Nova. Best-effort: el CRM
 // es la fuente de verdad del embudo, asi que un fallo aqui se registra y se
 // ignora (no rompe la accion del asesor).
-async function pushOdooStage(lead, stageName) {
+async function pushOdooStage(lead, stageKey) {
   if (!odoo.isEnabled() || !lead || !lead.odoo_lead_id) return;
   try {
-    await odoo.moveOpportunityStage(lead.odoo_lead_id, stageName);
+    await odoo.moveOpportunityStage(lead.odoo_lead_id, stageKey);
   } catch (err) {
-    console.error(`[odoo] lead ${lead.id}: no se movio la etapa a "${stageName}":`, err.message);
+    console.error(`[odoo] lead ${lead.id}: no se movio la etapa a "${stageKey}":`, err.message);
   }
 }
 
@@ -701,7 +701,7 @@ router.patch('/:id/contact', async (req, res) => {
   await db.prepare("UPDATE leads SET status = 'contactado', contacted_at = ? WHERE id = ?").run(now, id);
 
   const updated = await db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
-  await pushOdooStage(updated, 'Contactado');
+  await pushOdooStage(updated, 'contacted');
   broadcast('leads_changed', { reason: 'contacted', id });
   res.json(await serialize(updated));
 });
@@ -750,7 +750,7 @@ router.patch('/:id/quote', async (req, res) => {
     .run(now, now, id);
 
   const updated = await db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
-  await pushOdooStage(updated, 'Cotizado');
+  await pushOdooStage(updated, 'quoted');
   broadcast('leads_changed', { reason: 'quoted', id });
   res.json(await serialize(updated));
 });
@@ -813,7 +813,7 @@ router.post('/:id/quotation', async (req, res) => {
     .run(order.id, order.name, order.amount_total, now, now, id);
 
   const updated = await db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
-  await pushOdooStage(updated, 'Cotizado');
+  await pushOdooStage(updated, 'quoted');
   broadcast('leads_changed', { reason: 'quoted', id });
   res.json({ lead: await serialize(updated), quotation: order });
 });
@@ -1005,7 +1005,7 @@ router.post('/:id/close', async (req, res) => {
             .run(order.amount_total, order.name, id);
           closedLead = await db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
         }
-        await pushOdooStage(closedLead, 'Ganado');
+        await pushOdooStage(closedLead, 'won');
       } else if (closedLead.odoo_lead_id) {
         await odoo.callKw('crm.lead', 'action_set_lost', [[closedLead.odoo_lead_id]]).catch(() => {});
       }

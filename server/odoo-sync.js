@@ -41,14 +41,18 @@ function nowUtc() {
   return new Date().toISOString().replace('T', ' ').slice(0, 19);
 }
 
+const norm = (s) => String(s || '').trim().toLowerCase();
+
 // Oportunidad de Odoo -> estado objetivo en el CRM (o null = no tocar).
-function targetStatus(opp, stageInfo, thresholds) {
+// El nombre de la etapa de "contactado"/"cotizado" se configura en server/.env
+// (odoo.stageNames()); "ganado" se detecta por is_won.
+function targetStatus(opp, stageInfo, names) {
   if (opp.active === false) return 'cerrado_perdido';
   const st = Array.isArray(opp.stage_id) ? stageInfo[opp.stage_id[0]] : null;
   if (st && st.is_won) return null; // "Ganado" se cierra desde el CRM
-  const seq = st ? st.sequence : 0;
-  if (seq >= thresholds.quoteSeq) return 'cotizado';
-  if (seq >= thresholds.contactSeq) return 'contactado';
+  const name = norm(st && st.name);
+  if (name && name === norm(names.quoted)) return 'cotizado';
+  if (name && name === norm(names.contacted)) return 'contactado';
   return 'asignado';
 }
 
@@ -93,28 +97,21 @@ async function syncOnce() {
       context: { active_test: false },
     });
 
-    // Una sola lectura de las etapas involucradas (secuencia + is_won).
+    // Una sola lectura de las etapas involucradas (nombre + is_won).
     const stageIds = [...new Set(opps.filter((o) => Array.isArray(o.stage_id)).map((o) => o.stage_id[0]))];
     const stageInfo = {};
     if (stageIds.length) {
-      const stages = await odoo.callKw('crm.stage', 'read', [stageIds, ['name', 'sequence', 'is_won']]);
+      const stages = await odoo.callKw('crm.stage', 'read', [stageIds, ['name', 'is_won']]);
       for (const s of stages) stageInfo[s.id] = s;
     }
-    // Umbrales por nombre de etapa (por si alguien las renombró/reordenó).
-    let contactSeq = 2;
-    let quoteSeq = 3;
-    for (const s of Object.values(stageInfo)) {
-      if (/cotiz|quot/i.test(s.name)) quoteSeq = s.sequence;
-      else if (/contact/i.test(s.name)) contactSeq = s.sequence;
-    }
-    const thresholds = { contactSeq, quoteSeq };
+    const names = odoo.stageNames();
 
     let updated = 0;
     const changedLeadIds = [];
     for (const opp of opps) {
       const lead = byOppId.get(opp.id);
       if (!lead) continue;
-      const target = targetStatus(opp, stageInfo, thresholds);
+      const target = targetStatus(opp, stageInfo, names);
       if (!target) continue;
       if (applyToLead(lead, target)) {
         updated++;
