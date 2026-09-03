@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta content="width=device-width, initial-scale=1.0" name="viewport" />
+<title>Nova CRM</title>
+<link rel="icon" type="image/png" href="/img/favicon.png" />
+<link rel="apple-touch-icon" href="/img/favicon.png" />
+<!-- Manifest + service worker: permiten "Instalar Nova CRM" desde el menu
+     de Brave/Chrome (icono propio, ventana sin barra de navegador, anclable
+     a la barra de tareas) en vez de un simple acceso directo a la pestaña. -->
+<link rel="manifest" href="/manifest.json" />
+<meta name="theme-color" content="#981b1e" />
+<script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));
+  }
+</script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400&display=swap" rel="stylesheet" />
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-chart-sankey@0.14.0/dist/chartjs-chart-sankey.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+<script id="tailwind-config">
+  tailwind.config = {
+    darkMode: 'class',
+    theme: {
+      extend: {
+        colors: {
+          // Paleta de marca Manufacturas y Diseños NOVA (ver diseño/paleta de
+          // colores.png): Blood #981b1e y Lava #ce181e como rojos primarios,
+          // Gainsboro #dbdcdd como gris neutro secundario. primary/surface-*
+          // se derivaron rotando el tono (hue) de la paleta teal-verde
+          // anterior al tono de Blood/Lava (~358°) manteniendo saturacion y
+          // luminosidad de cada token intactas, para no romper ningun
+          // contraste ya afinado -- solo cambia el color, no el "peso"
+          // visual. secondary (azul, exito/dinero) y tertiary (naranja,
+          // riesgo) NO se tocan a proposito: la guia de marca no trae azul
+          // ni naranja, y esos dos tonos son los que hoy distinguen "venta
+          // ganada"/"en riesgo" de "critico" (error) y del rojo de marca --
+          // si tambien fueran rojos, esas alertas se volverian imposibles de
+          // diferenciar de un boton o del nav normal.
+          //
+          // `primary` (el rojo) se reserva a proposito para momentos clave --
+          // el logo y los botones de accion principal (Registrar, Guardar,
+          // Cerrar venta...) -- todo lo demas que antes lo usaba de forma
+          // ambiental (item activo del menu, bordes de foco en inputs,
+          // hovers de botones secundarios/enlaces) pasa a tonos neutros
+          // (`on-surface`/`outline`/`surface-container-*`): mucho rojo en
+          // pantallas de uso constante saturaba visualmente. Los badges de
+          // estado (`primary-fixed`/`primary-container`, ej. "Cotizado") NO
+          // se tocan -- ahi el rosa es parte de un esquema de color por
+          // etapa del embudo, no un acento decorativo.
+          'surface-container-low': '#f9f8f8',
+          'on-secondary-container': '#0b3d78',
+          'surface-container-high': '#eae9e9',
+          'on-primary-container': '#430406',
+          outline: '#858282',
+          'error-container': '#fbdad8',
+          error: '#d03b3b',
+          'primary-fixed': '#f0d6d7',
+          'on-primary': '#ffffff',
+          'tertiary-fixed': '#fde1d3',
+          'surface-container-lowest': '#ffffff',
+          'tertiary-fixed-dim': '#f6b48f',
+          'surface-tint': '#981b1e',
+          'on-error': '#ffffff',
+          'on-surface': '#191717',
+          'on-tertiary-fixed': '#431403',
+          'secondary-fixed-dim': '#9dc4f2',
+          'inverse-surface': '#262424',
+          'on-tertiary-fixed-variant': '#a8461f',
+          'on-secondary-fixed': '#062347',
+          'on-primary-fixed-variant': '#741114',
+          'on-secondary': '#ffffff',
+          'secondary-fixed': '#dbe9fb',
+          surface: '#ffffff',
+          'tertiary-container': '#fde1d3',
+          'on-error-container': '#7a1410',
+          'on-surface-variant': '#5b5959',
+          tertiary: '#ec835a',
+          'on-tertiary': '#ffffff',
+          'surface-dim': '#e4e2e2',
+          'surface-bright': '#ffffff',
+          secondary: '#2a78d6',
+          'on-tertiary-container': '#7a2c0f',
+          'on-secondary-fixed-variant': '#14509a',
+          'surface-variant': '#dbdcdd',
+          'on-background': '#191717',
+          'inverse-primary': '#ce181e',
+          'secondary-container': '#dbe9fb',
+          'primary-container': '#f0d6d7',
+          'outline-variant': '#dbdcdd',
+          'inverse-on-surface': '#f1f0f0',
+          'primary-fixed-dim': '#d67d80',
+          background: '#f5f4f4',
+          'surface-container-highest': '#dbdcdd',
+          primary: '#981b1e',
+          'surface-container': '#f1f0f0',
+          'on-primary-fixed': '#2a0102',
+          // Escala de estado fija (buena/advertencia/grave/critica) para
+          // badges de SLA, acciones prioritarias y tablero Kanban -- no se
+          // usa para series de graficas (esas usan la paleta categorica ya
+          // validada, ver components/colombiaMap.js PRODUCT_COLORS).
+          'status-good': '#0ca30c',
+          'status-warning': '#fab219',
+          'status-serious': '#ec835a',
+          'status-critical': '#d03b3b',
+        },
+        borderRadius: {
+          DEFAULT: '0.125rem',
+          lg: '0.25rem',
+          xl: '0.5rem',
+          full: '0.75rem',
+        },
+        spacing: {
+          'margin-desktop': '24px',
+          gutter: '16px',
+          'table-cell-padding': '8px 12px',
+          base: '4px',
+          'margin-mobile': '16px',
+        },
+        fontFamily: {
+          'headline-lg': ['Inter', 'system-ui', 'sans-serif'],
+          'headline-md': ['Inter', 'system-ui', 'sans-serif'],
+          'headline-sm': ['Inter', 'system-ui', 'sans-serif'],
+          'body-sm': ['Inter', 'system-ui', 'sans-serif'],
+          'label-bold': ['Inter', 'system-ui', 'sans-serif'],
+          'body-md': ['Inter', 'system-ui', 'sans-serif'],
+          'display-kpi': ['Inter', 'system-ui', 'sans-serif'],
+          // Completan la escala pedida en la Fase 2 (display/h1/h2/h3/body/
+          // body-sm/label/caption): headline-lg/md/sm ya cubren h1/h2/h3,
+          // body-md/body-sm ya cubren body/body-sm, display-kpi ya cubre
+          // display -- solo faltaban estos dos. No se renombran los tokens
+          // existentes (los usan ~200 sitios en las vistas) para no romper
+          // nada sin necesidad.
+          label: ['Inter', 'system-ui', 'sans-serif'],
+          caption: ['Inter', 'system-ui', 'sans-serif'],
+        },
+        fontSize: {
+          'headline-lg': ['30px', { lineHeight: '38px', fontWeight: '600' }],
+          'headline-md': ['24px', { lineHeight: '32px', fontWeight: '600' }],
+          'headline-sm': ['20px', { lineHeight: '28px', fontWeight: '700' }],
+          'body-sm': ['12px', { lineHeight: '16px', fontWeight: '400' }],
+          'label-bold': ['11px', { lineHeight: '12px', letterSpacing: '0.05em', fontWeight: '700' }],
+          'body-md': ['14px', { lineHeight: '20px', fontWeight: '400' }],
+          'display-kpi': ['48px', { lineHeight: '56px', letterSpacing: '-0.02em', fontWeight: '700' }],
+          // "label" = misma metrica que label-bold (mismo uso: eyebrows y
+          // encabezados de columna en mayuscula) pero peso medio en vez de
+          // negrita, para cuando la negrita compite demasiado con el resto.
+          label: ['11px', { lineHeight: '12px', letterSpacing: '0.05em', fontWeight: '500' }],
+          // "caption" = texto secundario/pie de dato mas chico que body-sm.
+          // Reemplaza los `text-[10px]`/`text-[11px]` sueltos que hoy estan
+          // escritos a mano en varias vistas (timestamps, notas al pie de
+          // tabla) por un token real.
+          caption: ['11px', { lineHeight: '14px', fontWeight: '400' }],
+        },
+      },
+    },
+  };
+</script>
+<!--
+  Componente Boton (Fase 4). Procesado por el motor JIT de Tailwind (Play
+  CDN) igual que el resto de la app -- no es una libreria nueva, son clases
+  que resuelven a los mismos tokens M3 de arriba via @apply. 5 variantes
+  (primary/secondary/ghost/destructive/icon) x 6 estados (default/hover/
+  active/focus/disabled/loading), para reemplazar los 20+ strings de clase
+  que hoy se repetian sueltos en cada vista.
+
+  Uso: <button class="btn btn-primary">Guardar</button>
+       <button class="btn btn-secondary" disabled>...</button>
+       <button class="btn btn-icon" aria-label="Cerrar"><span class="material-symbols-outlined">close</span></button>
+       <button class="btn btn-primary" data-loading>...</button>  -- data-loading = estado "loading"
+-->
+<style type="text/tailwindcss">
+  @layer components {
+    .btn {
+      @apply relative inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2
+             text-label-bold font-label-bold whitespace-nowrap select-none
+             transition-colors duration-150 ease-out
+             disabled:opacity-45 disabled:cursor-not-allowed disabled:pointer-events-none
+             focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-outline focus-visible:ring-offset-2 focus-visible:ring-offset-surface;
+    }
+    .btn .material-symbols-outlined { @apply text-[18px]; }
+
+    /* Primary: accion principal de la pantalla/formulario -- una sola por vista. */
+    .btn-primary {
+      @apply bg-primary text-on-primary shadow-sm
+             hover:bg-on-primary-fixed-variant active:brightness-90;
+    }
+    /* Secondary: accion alterna, no destructiva -- mismo patron "tonal
+       outline" que ya usaban SLA/Seguimiento a mano (bg-surface-container-
+       lowest + border + hover primary/10), ahora formalizado. */
+    .btn-secondary {
+      @apply bg-surface-container-lowest text-on-surface border border-outline-variant
+             hover:bg-surface-container-low active:bg-surface-container-high;
+    }
+    /* Tertiary/Ghost: accion de bajo enfasis (cancelar, ver mas) -- sin relleno ni borde. */
+    .btn-ghost {
+      @apply bg-transparent text-on-surface-variant
+             hover:bg-surface-container-low hover:text-on-surface active:bg-surface-container-high;
+    }
+    /* Destructive: borra/revierte algo -- rojo, solo para esa accion. */
+    .btn-destructive {
+      @apply bg-error text-on-error shadow-sm
+             hover:bg-error/90 active:brightness-90;
+    }
+    /* Icon button: solo icono, sin texto -- SIEMPRE con aria-label (el icono
+       solo no es un nombre accesible). Circular, mismo hover que el resto
+       de iconos de topbar/sidebar. */
+    .btn-icon {
+      @apply p-2 rounded-full bg-transparent text-on-surface-variant
+             hover:bg-surface-container-low hover:text-on-surface active:bg-surface-container-high;
+    }
+    .btn-icon .material-symbols-outlined { @apply text-[20px]; }
+
+    /* Loading: se activa con el atributo data-loading (no una clase, para
+       poder alternarlo con dataset.loading = '' / delete sin tocar
+       className). Oculta el contenido -- texto suelto o envuelto en <span>,
+       icono, lo que sea -- via color:transparent (no visibility, que no
+       alcanza un nodo de texto plano) sin colapsar el ancho del boton, y
+       muestra un spinner centrado. El color del spinner se fija aparte por
+       variante porque no puede heredar del boton (que ahora es transparente).*/
+    .btn[data-loading] {
+      color: transparent !important;
+      @apply pointer-events-none;
+    }
+    .btn[data-loading]::after {
+      content: '';
+      @apply absolute w-4 h-4 rounded-full border-2 border-t-transparent;
+    }
+    .btn-primary[data-loading]::after,
+    .btn-destructive[data-loading]::after {
+      @apply border-on-primary;
+    }
+    .btn-secondary[data-loading]::after,
+    .btn-ghost[data-loading]::after,
+    .btn-icon[data-loading]::after {
+      @apply border-outline;
+    }
+    @media (prefers-reduced-motion: no-preference) {
+      .btn[data-loading]::after { animation: btn-spin 0.6s linear infinite; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .btn[data-loading]::after { @apply opacity-60; }
+    }
+    @keyframes btn-spin {
+      to { transform: rotate(360deg); }
+    }
+  }
+</style>
+<link rel="stylesheet" href="/css/brand.css" />
+</head>
+<body class="bg-background font-body-md text-on-background min-h-screen flex">
+
+<!-- Sidebar -->
+<nav id="sidebar" class="fixed left-0 top-0 h-screen w-[252px] bg-surface border-r border-outline-variant flex flex-col z-40 transition-transform duration-200 ease-in-out">
+  <div class="p-5 flex items-center gap-3">
+    <img src="/img/logo.png" alt="Manufacturas y Diseños Nova" class="h-10 w-auto shrink-0" />
+    <div class="min-w-0">
+      <h1 class="text-headline-sm font-headline-sm font-extrabold text-on-surface leading-tight truncate">Nova CRM</h1>
+      <p class="text-body-sm font-body-sm text-on-surface-variant truncate">Gestión Comercial Operativa</p>
+    </div>
+  </div>
+  <ul id="nav-list" class="flex-1 overflow-y-auto py-2 px-3 space-y-0.5">
+    <li><a data-route="dashboard" href="#/dashboard" class="nav-link flex items-center gap-3 px-3 py-2.5 rounded-lg text-on-surface-variant hover:bg-surface-container-low transition-colors">
+      <span class="material-symbols-outlined text-[20px]">dashboard</span><span class="text-label-bold font-label-bold">Dashboard</span></a></li>
+
+    <li>
+      <details data-group="ventas" open class="group/nav">
+        <summary class="nav-group-summary list-none flex items-center gap-3 px-3 py-2.5 rounded-lg text-on-surface-variant hover:bg-surface-container-low transition-colors cursor-pointer select-none">
+          <span class="material-symbols-outlined text-[20px]">payments</span>
+          <span class="text-label-bold font-label-bold flex-1">Ventas</span>
+          <span class="material-symbols-outlined text-[18px] transition-transform group-open/nav:rotate-90">chevron_right</span>
+        </summary>
+        <ul class="mt-0.5 ml-[18px] pl-4 border-l border-outline-variant space-y-0.5">
+          <li><a data-route="ventas" href="#/ventas" class="nav-link flex items-center px-3 py-2 rounded-lg text-body-sm font-body-sm text-on-surface-variant hover:bg-surface-container-low transition-colors">Registro Operativo</a></li>
+          <li><a data-route="sla" href="#/sla" class="nav-link flex items-center px-3 py-2 rounded-lg text-body-sm font-body-sm text-on-surface-variant hover:bg-surface-container-low transition-colors">Control SLA</a></li>
+          <li><a data-route="seguimiento" href="#/seguimiento" class="nav-link flex items-center px-3 py-2 rounded-lg text-body-sm font-body-sm text-on-surface-variant hover:bg-surface-container-low transition-colors">Seguimiento</a></li>
+        </ul>
+      </details>
+    </li>
+
+    <li><a data-route="clientes" href="#/clientes" class="nav-link flex items-center gap-3 px-3 py-2.5 rounded-lg text-on-surface-variant hover:bg-surface-container-low transition-colors">
+      <span class="material-symbols-outlined text-[20px]">contacts</span><span class="text-label-bold font-label-bold">Clientes</span></a></li>
+    <li><a data-route="informe" href="#/informe" class="nav-link flex items-center gap-3 px-3 py-2.5 rounded-lg text-on-surface-variant hover:bg-surface-container-low transition-colors">
+      <span class="material-symbols-outlined text-[20px]">summarize</span><span class="text-label-bold font-label-bold">Informe</span></a></li>
+    <li><a data-route="ventas-cerradas" href="#/ventas-cerradas" class="nav-link flex items-center gap-3 px-3 py-2.5 rounded-lg text-on-surface-variant hover:bg-surface-container-low transition-colors">
+      <span class="material-symbols-outlined text-[20px]">paid</span><span class="text-label-bold font-label-bold">Ventas Cerradas</span></a></li>
+    <li><a data-route="estadisticas" href="#/estadisticas" class="nav-link flex items-center gap-3 px-3 py-2.5 rounded-lg text-on-surface-variant hover:bg-surface-container-low transition-colors">
+      <span class="material-symbols-outlined text-[20px]">leaderboard</span><span class="text-label-bold font-label-bold">Estadísticas</span></a></li>
+    <li><a data-route="asesores" href="#/asesores" class="nav-link flex items-center gap-3 px-3 py-2.5 rounded-lg text-on-surface-variant hover:bg-surface-container-low transition-colors">
+      <span class="material-symbols-outlined text-[20px]">group</span><span class="text-label-bold font-label-bold">Asesores</span></a></li>
+    <li><a data-route="ajustes" href="#/ajustes" class="nav-link flex items-center gap-3 px-3 py-2.5 rounded-lg text-on-surface-variant hover:bg-surface-container-low transition-colors">
+      <span class="material-symbols-outlined text-[20px]">settings</span><span class="text-label-bold font-label-bold">Ajustes</span></a></li>
+  </ul>
+  <div class="p-5 border-t border-outline-variant flex items-center gap-3">
+    <div class="w-10 h-10 rounded-full bg-surface-container-highest flex items-center justify-center font-bold text-on-surface-variant shrink-0">A</div>
+    <div class="min-w-0">
+      <p class="text-label-bold font-label-bold truncate">Admin User</p>
+      <p class="text-body-sm font-body-sm text-on-surface-variant truncate">Operador Sr.</p>
+    </div>
+  </div>
+</nav>
+
+<!-- Main column -->
+<div id="main-col" class="flex-1 ml-[240px] flex flex-col min-h-screen transition-[margin] duration-200 ease-in-out">
+  <header id="topbar" class="flex justify-between items-center w-full h-16 px-margin-desktop sticky top-0 z-30 bg-surface border-b border-outline-variant">
+    <div class="flex items-center gap-2">
+      <button id="sidebar-toggle-btn" class="p-2 -ml-2 text-on-surface-variant hover:text-on-surface hover:bg-surface-container-low rounded-lg transition-colors" title="Mostrar/ocultar menú">
+        <span class="material-symbols-outlined">menu</span>
+      </button>
+      <h2 id="page-title" class="text-headline-sm font-headline-sm font-bold text-on-surface">Nova CRM</h2>
+    </div>
+    <div class="flex items-center gap-4">
+      <!-- El buscador y la campana de notificaciones vivian aqui fijos en
+           todas las pantallas; ahora cada vista los monta donde le sirven
+           (hoy solo Ventas, ver ventas.js) para que este encabezado quede
+           limpio en el resto. -->
+      <button id="sla-badge-btn" class="hidden p-2 text-error hover:text-error/80 transition-colors relative" title="Leads críticos SLA">
+        <span class="material-symbols-outlined">warning</span>
+        <span id="sla-badge-count" class="absolute -top-0.5 -right-0.5 bg-error text-on-error text-[10px] font-bold rounded-full w-4 h-4 flex items-center justify-center">0</span>
+      </button>
+      <span id="conn-dot" class="w-2 h-2 rounded-full bg-outline-variant ml-1" title="Conectando…"></span>
+    </div>
+  </header>
+  <main id="view-root" class="flex-1 p-margin-desktop"></main>
+</div>
+
+<div id="toast-root" class="fixed bottom-4 right-4 z-[100] flex flex-col gap-2"></div>
+
+<script type="module" src="/js/auth.js"></script>
+</body>
+</html>

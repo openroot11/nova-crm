@@ -1,0 +1,633 @@
+import { escapeHtml, formatMoney, STATUS_OPTIONS } from '../utils.js';
+import { COLOMBIA_CITY_NAMES } from '../colombia-cities.js';
+import { renderLeadKanban } from '../components/leadKanban.js';
+import { mountNotifBell } from '../components/notifBell.js';
+import { kpiTile } from '../components/kpiTile.js';
+
+const PRODUCTS = ['Carpas', 'Cortinas', 'Gramas', 'Baby Gym', 'Forros', 'Pisos Vinílicos', 'Banderas', 'Otro'];
+const SOURCES = ['WhatsApp', 'Correo', 'Llamada', 'Otro'];
+const DEFAULT_SOURCE = 'WhatsApp';
+
+// Fecha LOCAL (no UTC) desplazada `daysAgo` dias -- igual criterio que
+// dashboard.js (todayIso): con toISOString() a la noche en Colombia (UTC-5)
+// la fecha ya se corre a "mañana" en UTC, y estos cubos de dias quedarian
+// mal calculados.
+function localDateStr(daysAgo) {
+  const d = new Date();
+  d.setDate(d.getDate() - daysAgo);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+// "Pegar datos del cliente": reconoce el formato tipico en el que llegan los
+// datos de un cliente potencial -- una linea por dato, con o sin emoji al
+// inicio ("👤 Nombre o razón social: Juan Pérez"), separados por ":"/"-"/"–"
+// o, si no hay separador, pegados directo despues de la etiqueta. Cada
+// patron incluye la frase completa de la etiqueta (no solo la primera
+// palabra) para no dejar el resto de la etiqueta pegado al valor cuando no
+// hay separador.
+const PASTE_FIELD_PATTERNS = [
+  { field: 'name', re: /nombre(\s*o\s*raz[oó]n\s*social)?/i },
+  { field: 'document', re: /nit(\s*o\s*c[eé]dula)?|c[eé]dula/i },
+  { field: 'address', re: /direcci[oó]n/i },
+  { field: 'city', re: /ciudad/i },
+  { field: 'phone', re: /tel[eé]fono|celular/i },
+  { field: 'email', re: /correo(\s*electr[oó]nico)?|e-?mail/i },
+];
+
+function parseClientPaste(text) {
+  const result = {};
+  const lines = String(text || '').split(/\r?\n/);
+  for (const rawLine of lines) {
+    // Quita emojis/simbolos sueltos al inicio de la linea (👤, 🏢, 📍, "-", "•"...).
+    const line = rawLine.replace(/^[^\p{L}\p{N}]+/u, '').trim();
+    if (!line) continue;
+    for (const { field, re } of PASTE_FIELD_PATTERNS) {
+      if (field in result) continue;
+      const m = re.exec(line);
+      if (!m) continue;
+      const fromLabel = line.slice(m.index);
+      const withSeparator = fromLabel.match(/^.*?[:\-–]\s*(.+)$/);
+      const value = withSeparator ? withSeparator[1].trim() : fromLabel.slice(m[0].length).replace(/^[\s:\-–]+/, '').trim();
+      if (value) result[field] = value;
+      break;
+    }
+  }
+  return result;
+}
+
+// Quita tildes para comparar ("bogota" == "Bogotá") -- muy comun que a mano
+// (o por WhatsApp) el nombre de la ciudad llegue sin acentos.
+const COMBINING_MARKS_RE = new RegExp(String.fromCharCode(0x5b, 0x5c, 0x75, 0x30, 0x33, 0x30, 0x30, 0x2d, 0x5c, 0x75, 0x30, 0x33, 0x36, 0x66, 0x5d), 'g');
+function stripAccents(s) {
+  return s.normalize('NFD').replace(COMBINING_MARKS_RE, '');
+}
+
+// La ciudad va en un <select>, no texto libre -- busca coincidencia exacta
+// primero, luego una contenida (ej. "Bogota D.C." -> "Bogotá").
+function matchCityName(value) {
+  if (!value) return null;
+  const norm = stripAccents(value.trim().toLowerCase());
+  if (!norm) return null;
+  return (
+    COLOMBIA_CITY_NAMES.find((c) => stripAccents(c.toLowerCase()) === norm) ||
+    COLOMBIA_CITY_NAMES.find((c) => norm.includes(stripAccents(c.toLowerCase())) || stripAccents(c.toLowerCase()).includes(norm)) ||
+    null
+  );
+}
+
+export async function mount(container, ctx) {
+  // Un asesor ve la misma pantalla que coordinador/admin (mismo Registro
+  // Operativo), solo que sin Alta Rápida -- no puede dar de alta ni asignar
+  // leads nuevos, asi que esa columna desaparece y el tablero ocupa todo el
+  // ancho (ver xl:col-span-12 mas abajo).
+  // Solo coordinador/admin dan de alta y asignan leads nuevos; el backend ya
+  // lo exige (POST /api/leads), aquí solo se evita mostrar un formulario que
+  // fallaría al enviarse. "Generar informe" (exportar Excel) sigue el mismo
+  // criterio: es una herramienta de reporte para quien gestiona el equipo,
+  // no algo que un asesor necesite para su propio dia a dia.
+  const canCreate = ctx.user?.role !== 'asesor';
+
+  container.innerHTML = `
+    <div class="grid grid-cols-1 xl:grid-cols-12 gap-gutter items-start">
+      ${canCreate ? `
+      <div id="alta-rapida-col" class="hidden xl:col-span-4 bg-surface rounded-xl border border-outline-variant shadow-sm p-6">
+        <div class="flex items-center justify-between mb-6">
+          <h3 class="text-headline-md font-headline-md text-on-surface">Alta Rápida</h3>
+          <button type="button" id="alta-rapida-close-btn" class="p-1 -m-1 text-on-surface-variant hover:text-on-surface transition-colors" title="Ocultar Alta Rápida">
+            <span class="material-symbols-outlined">close</span>
+          </button>
+        </div>
+        <form id="alta-form" class="space-y-5">
+          <div class="p-3 bg-surface-container-low border border-dashed border-outline-variant rounded-md">
+            <label class="flex items-center gap-1 text-label-bold font-label-bold text-on-surface-variant mb-1 uppercase tracking-wider">
+              <span class="material-symbols-outlined text-[15px]">content_paste</span>Pegar datos del cliente
+            </label>
+            <textarea id="f-paste" rows="2" placeholder="Pega aquí el bloque con nombre, NIT/cédula, dirección, ciudad, teléfono y correo — se autocompleta solo." class="w-full p-2 bg-surface border border-outline-variant rounded-md text-body-sm focus:border-outline focus:ring-2 focus:ring-outline/20 outline-none transition-all resize-none"></textarea>
+            <div class="flex items-center justify-between mt-1.5">
+              <p class="text-[11px] text-on-surface-variant">Se llenan los campos de abajo automáticamente.</p>
+              <button type="button" id="f-paste-apply" class="shrink-0 text-[11px] font-label-bold text-on-surface hover:underline">Autocompletar</button>
+            </div>
+          </div>
+          <div class="relative">
+            <label class="block text-label-bold font-label-bold text-on-surface-variant mb-1 uppercase tracking-wider">Nombre del Cliente *</label>
+            <input id="f-nombre" required type="text" autocomplete="off" placeholder="Ej. Juan Pérez — escribe para buscar clientes existentes" class="w-full p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md focus:border-outline focus:ring-2 focus:ring-outline/20 outline-none transition-all" />
+            <div id="f-nombre-suggestions" class="hidden absolute z-20 mt-1 w-full bg-surface border border-outline-variant rounded-md shadow-lg max-h-56 overflow-y-auto"></div>
+            <p id="f-cliente-hint" class="hidden text-[11px] text-secondary mt-1 flex items-center gap-1"><span class="material-symbols-outlined text-[13px]">check_circle</span>Cliente existente vinculado — se sumará a su ficha en Clientes.</p>
+          </div>
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label class="block text-label-bold font-label-bold text-on-surface-variant mb-1 uppercase tracking-wider">Teléfono *</label>
+              <input id="f-telefono" required type="tel" placeholder="300 000 0000" class="w-full p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md focus:border-outline focus:ring-2 focus:ring-outline/20 outline-none transition-all" />
+            </div>
+            <div>
+              <label class="block text-label-bold font-label-bold text-on-surface-variant mb-1 uppercase tracking-wider">Documento</label>
+              <input id="f-documento" type="text" placeholder="Opcional" class="w-full p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md focus:border-outline focus:ring-2 focus:ring-outline/20 outline-none transition-all" />
+            </div>
+          </div>
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label class="block text-label-bold font-label-bold text-on-surface-variant mb-1 uppercase tracking-wider">Correo Electrónico</label>
+              <input id="f-correo" type="email" placeholder="Opcional" class="w-full p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md focus:border-outline focus:ring-2 focus:ring-outline/20 outline-none transition-all" />
+            </div>
+            <div>
+              <label class="block text-label-bold font-label-bold text-on-surface-variant mb-1 uppercase tracking-wider">Dirección</label>
+              <input id="f-direccion" type="text" placeholder="Opcional" class="w-full p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md focus:border-outline focus:ring-2 focus:ring-outline/20 outline-none transition-all" />
+            </div>
+          </div>
+          <div>
+            <label class="block text-label-bold font-label-bold text-on-surface-variant mb-1 uppercase tracking-wider">Asignar a Asesor *</label>
+            <div id="f-asesor-suggestion" class="hidden p-3 border border-outline-variant rounded-md bg-surface-container-lowest flex items-center justify-between gap-3">
+              <div class="min-w-0">
+                <p class="text-[10px] font-label-bold text-on-surface-variant uppercase tracking-wider">Turno sugerido</p>
+                <p id="f-asesor-suggestion-name" class="font-bold text-on-surface truncate">—</p>
+                <p id="f-asesor-suggestion-reason" class="text-[11px] text-on-surface-variant"></p>
+              </div>
+              <button type="button" id="f-asesor-change-btn" class="shrink-0 text-body-sm font-label-bold text-on-surface hover:underline">Elegir otro</button>
+            </div>
+            <select id="f-asesor" required class="w-full p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md focus:border-outline focus:ring-2 focus:ring-outline/20 outline-none transition-all appearance-none cursor-pointer">
+              <option value="">Cargando asesores…</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-label-bold font-label-bold text-on-surface-variant mb-1 uppercase tracking-wider">Producto de Interés</label>
+            <select id="f-producto" class="w-full p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md focus:border-outline focus:ring-2 focus:ring-outline/20 outline-none transition-all appearance-none cursor-pointer">
+              ${PRODUCTS.map((p) => `<option value="${p}">${p}</option>`).join('')}
+            </select>
+            <input id="f-producto-otro" type="text" placeholder="Especifica el producto..." class="hidden mt-2 w-full p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md focus:border-outline focus:ring-2 focus:ring-outline/20 outline-none transition-all" />
+          </div>
+          <div>
+            <label class="block text-label-bold font-label-bold text-on-surface-variant mb-1 uppercase tracking-wider">Canal de Entrada</label>
+            <select id="f-source" class="w-full p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md focus:border-outline focus:ring-2 focus:ring-outline/20 outline-none transition-all appearance-none cursor-pointer">
+              ${SOURCES.map((s) => `<option value="${s}" ${s === DEFAULT_SOURCE ? 'selected' : ''}>${s}</option>`).join('')}
+            </select>
+          </div>
+          <div>
+            <label class="block text-label-bold font-label-bold text-on-surface-variant mb-1 uppercase tracking-wider">Ciudad</label>
+            <select id="f-ciudad" class="w-full p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md focus:border-outline focus:ring-2 focus:ring-outline/20 outline-none transition-all appearance-none cursor-pointer">
+              <option value="">Sin especificar</option>
+              ${COLOMBIA_CITY_NAMES.map((c) => `<option value="${c}">${c}</option>`).join('')}
+            </select>
+          </div>
+          <div>
+            <label class="block text-label-bold font-label-bold text-on-surface-variant mb-1 uppercase tracking-wider">Notas Rápidas</label>
+            <textarea id="f-notas" rows="3" placeholder="Detalles de la consulta inicial..." class="w-full p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md focus:border-outline focus:ring-2 focus:ring-outline/20 outline-none transition-all resize-none"></textarea>
+          </div>
+          <div>
+            <button type="button" id="toggle-fecha" class="text-body-sm font-label-bold text-on-surface hover:text-on-primary-fixed-variant transition-colors inline-flex items-center gap-1">
+              <span class="material-symbols-outlined text-[16px]">event</span> ¿Es de un día anterior? Cambia la fecha
+            </button>
+            <div id="fecha-wrap" class="hidden mt-2">
+              <label class="block text-label-bold font-label-bold text-on-surface-variant mb-1 uppercase tracking-wider">Fecha y hora real de registro</label>
+              <input id="f-fecha" type="datetime-local" class="w-full p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md focus:border-outline focus:ring-2 focus:ring-outline/20 outline-none transition-all" />
+              <p class="text-[11px] text-on-surface-variant mt-1">Úsalo para meter clientes atrasados con su fecha real — así los reportes cuadran.</p>
+            </div>
+          </div>
+          <button type="submit" class="w-full py-3 bg-primary text-on-primary rounded-md font-label-bold text-label-bold hover:bg-on-primary-fixed-variant transition-colors flex items-center justify-center shadow-sm">
+            <span class="material-symbols-outlined mr-2 text-[18px]">how_to_reg</span>
+            REGISTRAR CLIENTE Y ASIGNAR
+          </button>
+        </form>
+      </div>` : ''}
+
+      <div id="leads-col" class="xl:col-span-12 bg-surface rounded-xl border border-outline-variant shadow-sm flex flex-col overflow-hidden">
+        <div class="p-6 border-b border-outline-variant flex items-center justify-between flex-wrap gap-3 bg-surface">
+          <div class="flex items-center space-x-3">
+            <h3 class="text-headline-md font-headline-md text-on-surface">Leads Registrados</h3>
+            <span id="count-badge" class="bg-secondary-container text-on-secondary-container px-2.5 py-0.5 rounded-full text-label-bold font-label-bold flex items-center">0 registros</span>
+          </div>
+          <div class="flex items-center gap-3">
+            ${canCreate ? `
+            <button type="button" id="new-client-toggle-btn" class="px-3 py-2 bg-primary text-on-primary rounded-md text-label-bold font-label-bold hover:bg-on-primary-fixed-variant transition-colors flex items-center gap-1.5">
+              <span class="material-symbols-outlined text-[18px]">person_add</span> Nuevo Cliente
+            </button>` : ''}
+            <div class="relative hidden md:block">
+              <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant text-[18px]">search</span>
+              <input id="ventas-search" type="text" placeholder="Buscar cliente, ID..." class="pl-9 pr-3 py-2 bg-surface-container-low border border-transparent rounded-full text-body-sm font-body-sm outline-none focus:border-outline focus:ring-1 focus:ring-outline w-56 transition-shadow" />
+            </div>
+            <div id="ventas-notif-mount"></div>
+            <button id="refresh-btn" class="p-2 border border-outline-variant rounded-md hover:bg-surface-container-low transition-colors text-on-surface-variant" title="Actualizar">
+              <span class="material-symbols-outlined text-[20px]">refresh</span>
+            </button>
+          </div>
+        </div>
+        <div class="p-4 border-b border-outline-variant bg-surface-container-low flex flex-wrap gap-3 items-end">
+          <div>
+            <label class="block text-[10px] font-label-bold text-on-surface-variant mb-1 uppercase tracking-wider">Estado</label>
+            <select id="filter-estado" class="p-2 bg-surface-container-lowest border border-outline-variant rounded-md text-body-sm outline-none focus:border-outline">
+              <option value="">Todos</option>
+              ${STATUS_OPTIONS.map((s) => `<option value="${s.value}">${s.label}</option>`).join('')}
+            </select>
+          </div>
+          <div>
+            <label id="filter-fecha-label" class="block text-[10px] font-label-bold text-on-surface-variant mb-1 uppercase tracking-wider">Fecha</label>
+            <select id="filter-fecha" class="p-2 bg-surface-container-lowest border border-outline-variant rounded-md text-body-sm outline-none focus:border-outline">
+              <option value="">Todos</option>
+              <option value="hoy">Hoy</option>
+              <option value="ayer">Ayer</option>
+              <option value="antiguos">Hace más de 3 días</option>
+            </select>
+          </div>
+          <button id="filter-clear" class="px-3 py-2 rounded-md border border-outline-variant text-body-sm font-label-bold text-on-surface-variant hover:bg-surface-container-lowest transition-colors">Limpiar filtros</button>
+          ${canCreate ? `
+          <button id="export-xlsx-btn" class="ml-auto px-3 py-2 bg-primary text-on-primary rounded-md text-label-bold font-label-bold hover:bg-on-primary-fixed-variant transition-colors flex items-center gap-1.5" title="Descarga en Excel los leads que cumplen los filtros de arriba">
+            <span class="material-symbols-outlined text-[18px]">download</span> Generar informe
+          </button>` : ''}
+        </div>
+        <div id="ventas-kpis" class="grid grid-cols-2 lg:grid-cols-4 gap-gutter p-4 border-b border-outline-variant"></div>
+        <div id="ventas-board-wrap" class="flex-1 overflow-y-auto p-4"></div>
+      </div>
+    </div>
+  `;
+
+  const form = container.querySelector('#alta-form');
+  const countBadge = container.querySelector('#count-badge');
+  const altaRapidaCol = container.querySelector('#alta-rapida-col');
+  const leadsCol = container.querySelector('#leads-col');
+
+  // Alta Rápida arranca oculta -- ocupa un cuarto de la pantalla para algo
+  // que solo hace falta de vez en cuando (dar de alta un cliente nuevo). Se
+  // abre con "Nuevo Cliente" y se cierra sola (o con la X) para no estorbarle
+  // al tablero, que es lo que se consulta todo el dia.
+  function setAltaRapidaVisible(visible) {
+    if (!altaRapidaCol) return;
+    altaRapidaCol.classList.toggle('hidden', !visible);
+    leadsCol.classList.toggle('xl:col-span-8', visible);
+    leadsCol.classList.toggle('xl:col-span-12', !visible);
+  }
+  const asesorSelect = container.querySelector('#f-asesor');
+  const asesorSuggestionBox = container.querySelector('#f-asesor-suggestion');
+  const asesorSuggestionName = container.querySelector('#f-asesor-suggestion-name');
+  const asesorSuggestionReason = container.querySelector('#f-asesor-suggestion-reason');
+  const asesorChangeBtn = container.querySelector('#f-asesor-change-btn');
+  const productoSelect = container.querySelector('#f-producto');
+  const productoOtro = container.querySelector('#f-producto-otro');
+  const submitBtn = form ? form.querySelector('button[type="submit"]') : null;
+  const nombreInput = container.querySelector('#f-nombre');
+  const nombreSuggestions = container.querySelector('#f-nombre-suggestions');
+  const clienteHint = container.querySelector('#f-cliente-hint');
+  let selectedClientId = null;
+  let clienteSearchDebounce;
+
+  if (nombreInput) {
+    nombreInput.addEventListener('input', () => {
+      selectedClientId = null;
+      clienteHint.classList.add('hidden');
+      clearTimeout(clienteSearchDebounce);
+      const term = nombreInput.value.trim();
+      if (term.length < 2) {
+        nombreSuggestions.classList.add('hidden');
+        return;
+      }
+      clienteSearchDebounce = setTimeout(async () => {
+        let matches = [];
+        try {
+          matches = await ctx.api.get(`/api/clients?q=${encodeURIComponent(term)}`);
+        } catch {
+          return;
+        }
+        if (!matches.length) {
+          nombreSuggestions.classList.add('hidden');
+          return;
+        }
+        nombreSuggestions.innerHTML = matches
+          .slice(0, 6)
+          .map(
+            (c) => `
+          <button type="button" data-client-id="${c.id}" data-client-name="${escapeHtml(c.name)}" data-client-phone="${escapeHtml(c.phone || '')}" data-client-document="${escapeHtml(c.document || '')}" data-client-address="${escapeHtml(c.address || '')}" data-client-email="${escapeHtml(c.email || '')}" class="w-full text-left px-3 py-2 hover:bg-surface-container-low transition-colors flex items-center justify-between gap-2">
+            <span class="text-body-sm font-semibold text-on-surface truncate">${escapeHtml(c.name)}</span>
+            <span class="text-[11px] text-on-surface-variant shrink-0">${escapeHtml(c.phone || 'sin teléfono')} · ${c.lead_count} pedido${c.lead_count === 1 ? '' : 's'}</span>
+          </button>`
+          )
+          .join('');
+        nombreSuggestions.classList.remove('hidden');
+      }, 250);
+    });
+    nombreSuggestions.addEventListener('click', (e) => {
+      const btn = e.target.closest('button[data-client-id]');
+      if (!btn) return;
+      selectedClientId = Number(btn.dataset.clientId);
+      nombreInput.value = btn.dataset.clientName;
+      // Trae tambien lo que ya se supiera de este cliente -- si ya tiene
+      // ficha, no hay por que volver a escribir su documento/direccion/correo.
+      if (btn.dataset.clientPhone) container.querySelector('#f-telefono').value = btn.dataset.clientPhone;
+      if (btn.dataset.clientDocument) container.querySelector('#f-documento').value = btn.dataset.clientDocument;
+      if (btn.dataset.clientAddress) container.querySelector('#f-direccion').value = btn.dataset.clientAddress;
+      if (btn.dataset.clientEmail) container.querySelector('#f-correo').value = btn.dataset.clientEmail;
+      nombreSuggestions.classList.add('hidden');
+      clienteHint.classList.remove('hidden');
+    });
+    document.addEventListener('click', (e) => {
+      if (!nombreInput.contains(e.target) && !nombreSuggestions.contains(e.target)) {
+        nombreSuggestions.classList.add('hidden');
+      }
+    });
+  }
+
+  const boardWrap = container.querySelector('#ventas-board-wrap');
+  const kpisEl = container.querySelector('#ventas-kpis');
+
+  const filterEstado = container.querySelector('#filter-estado');
+  const filterFecha = container.querySelector('#filter-fecha');
+  const filterFechaLabel = container.querySelector('#filter-fecha-label');
+  const searchInput = container.querySelector('#ventas-search');
+
+  // Vendido/Perdido son ventas ya cerradas: para esos dos estados el rango
+  // de fechas debe filtrar por cuando se CERRARON (closed_at), no por
+  // cuando entro el lead -- si no, "ventas cerradas de esta semana" te
+  // mostraria clientes cerrados hace meses solo porque llegaron esta semana.
+  // Para el resto de estados sigue siendo por fecha de registro (created_at).
+  function isClosedStatusFilter() {
+    return filterEstado.value === 'cerrado_ganado' || filterEstado.value === 'cerrado_perdido';
+  }
+  function updateDateFilterLabels() {
+    filterFechaLabel.textContent = isClosedStatusFilter() ? 'Fecha de cierre' : 'Fecha';
+  }
+  updateDateFilterLabels();
+
+  if (canCreate) {
+    container.querySelector('#new-client-toggle-btn').addEventListener('click', () => setAltaRapidaVisible(true));
+    container.querySelector('#alta-rapida-close-btn').addEventListener('click', () => setAltaRapidaVisible(false));
+
+    productoSelect.addEventListener('change', () => {
+      productoOtro.classList.toggle('hidden', productoSelect.value !== 'Otro');
+    });
+    const toggleFechaBtn = container.querySelector('#toggle-fecha');
+    const fechaWrap = container.querySelector('#fecha-wrap');
+    toggleFechaBtn.addEventListener('click', () => {
+      fechaWrap.classList.toggle('hidden');
+    });
+    // "No, elige otro": descarta la sugerencia y deja el dropdown manual de
+    // siempre a la vista, con el sugerido ya preseleccionado como punto de
+    // partida.
+    asesorChangeBtn.addEventListener('click', () => {
+      asesorSuggestionBox.classList.add('hidden');
+      asesorSelect.classList.remove('hidden');
+    });
+
+    // "Pegar datos del cliente": reparte el texto pegado en los campos de
+    // arriba (ver parseClientPaste). Se dispara solo al pegar (evento
+    // "paste", con un setTimeout(0) para leer el valor ya pegado) y tambien
+    // con el boton "Autocompletar" por si se escribio/edito el texto a mano.
+    const pasteInput = container.querySelector('#f-paste');
+    const pasteApplyBtn = container.querySelector('#f-paste-apply');
+    function applyClientPaste() {
+      const parsed = parseClientPaste(pasteInput.value);
+      let filled = 0;
+      if (parsed.name) {
+        nombreInput.value = parsed.name;
+        selectedClientId = null;
+        // Dispara la busqueda de "cliente existente" como si lo hubiera
+        // escrito a mano -- si ya tiene ficha, la sugerencia sigue apareciendo.
+        nombreInput.dispatchEvent(new Event('input', { bubbles: true }));
+        filled++;
+      }
+      if (parsed.document) {
+        container.querySelector('#f-documento').value = parsed.document;
+        filled++;
+      }
+      if (parsed.phone) {
+        container.querySelector('#f-telefono').value = parsed.phone;
+        filled++;
+      }
+      if (parsed.email) {
+        container.querySelector('#f-correo').value = parsed.email;
+        filled++;
+      }
+      if (parsed.address) {
+        container.querySelector('#f-direccion').value = parsed.address;
+        filled++;
+      }
+      if (parsed.city) {
+        const matched = matchCityName(parsed.city);
+        if (matched) {
+          container.querySelector('#f-ciudad').value = matched;
+          filled++;
+        } else {
+          ctx.toast(`No reconocí la ciudad "${parsed.city}" — selecciónala manualmente`, 'error');
+        }
+      }
+      if (filled === 0) {
+        ctx.toast('No se reconoció ningún dato en el texto pegado', 'error');
+      } else {
+        ctx.toast(`${filled} campo${filled === 1 ? '' : 's'} autocompletado${filled === 1 ? '' : 's'}`, 'success');
+      }
+    }
+    pasteInput.addEventListener('paste', () => setTimeout(applyClientPaste, 0));
+    pasteApplyBtn.addEventListener('click', applyClientPaste);
+  }
+
+  // Muestra el turno sugerido (GET /api/advisors/suggest-turn) en vez del
+  // dropdown crudo -- "Elegir otro" (mas abajo) revela el dropdown de
+  // siempre para anular la sugerencia manualmente. asesorSelect ya trae las
+  // opciones cargadas (sin rojo) antes de llamar a esto.
+  async function loadSuggestion() {
+    let data = null;
+    try {
+      data = await ctx.api.get('/api/advisors/suggest-turn');
+    } catch {
+      /* si falla, se queda el dropdown manual visible tal cual */
+    }
+    const suggested = data?.advisor && asesorSelect.querySelector(`option[value="${data.advisor.id}"]`) ? data.advisor : null;
+    if (suggested) {
+      asesorSelect.value = String(suggested.id);
+      asesorSuggestionName.textContent = suggested.name;
+      asesorSuggestionReason.textContent = data.all_red
+        ? 'Todos los asesores están en rojo — se asigna igual'
+        : data.reason === 'turno reducido (amarillo)'
+        ? 'Turno reducido (amarillo)'
+        : 'Turno normal';
+      asesorSuggestionBox.classList.remove('hidden');
+      asesorSelect.classList.add('hidden');
+    } else {
+      asesorSuggestionBox.classList.add('hidden');
+      asesorSelect.classList.remove('hidden');
+    }
+  }
+
+  async function loadAdvisorOptions() {
+    if (canCreate) {
+      let advisors = [];
+      try {
+        const active = (await ctx.api.get('/api/advisors')).filter((a) => !a.is_group && a.active);
+        // Un asesor en rojo (sobrecargado de leads vencidos) no se ofrece
+        // como destino ni en la sugerencia ni en el dropdown manual -- salvo
+        // que TODOS los activos esten en rojo, caso en el que no se bloquea
+        // Alta Rapida por completo (ver server/routes/advisors.js).
+        const nonRed = active.filter((a) => a.performance_status !== 'rojo');
+        advisors = nonRed.length ? nonRed : active;
+      } catch {
+        ctx.toast('No se pudo cargar la lista de asesores', 'error');
+      }
+      const previousValue = asesorSelect.value;
+      if (advisors.length === 0) {
+        asesorSelect.innerHTML = '<option value="">Sin asesores activos disponibles</option>';
+        asesorSuggestionBox.classList.add('hidden');
+        asesorSelect.classList.remove('hidden');
+        submitBtn.disabled = true;
+        submitBtn.classList.add('opacity-50', 'cursor-not-allowed');
+      } else {
+        asesorSelect.innerHTML =
+          '<option value="">Selecciona un asesor…</option>' +
+          advisors.map((a) => `<option value="${a.id}">${escapeHtml(a.name)}</option>`).join('');
+        if (advisors.some((a) => String(a.id) === previousValue)) asesorSelect.value = previousValue;
+        submitBtn.disabled = false;
+        submitBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+        await loadSuggestion();
+      }
+    }
+  }
+
+  let allLeads = [];
+  let searchQuery = '';
+
+  function buildQuery() {
+    const params = new URLSearchParams();
+    if (filterEstado.value) params.set('status', filterEstado.value);
+    if (searchQuery) {
+      // Buscar es "encontrar este cliente donde sea": ignora el filtro de
+      // fecha (que por defecto es solo el dia de hoy) para no dar falsos
+      // "no encontrado" en clientes de dias anteriores.
+      params.set('q', searchQuery);
+    } else {
+      const dateField = isClosedStatusFilter() ? ['closed_from', 'closed_to'] : ['from', 'to'];
+      if (filterFecha.value === 'hoy') {
+        const d = localDateStr(0);
+        params.set(dateField[0], d);
+        params.set(dateField[1], d);
+      } else if (filterFecha.value === 'ayer') {
+        const d = localDateStr(1);
+        params.set(dateField[0], d);
+        params.set(dateField[1], d);
+      } else if (filterFecha.value === 'antiguos') {
+        // "Hace mas de 3 dias" = 4+ dias de antiguedad -- sin limite inferior.
+        params.set(dateField[1], localDateStr(4));
+      }
+    }
+    const qs = params.toString();
+    return qs ? `?${qs}` : '';
+  }
+
+  function renderCurrent() {
+    countBadge.textContent = `${allLeads.length} registro${allLeads.length === 1 ? '' : 's'}`;
+
+    const total = allLeads.length;
+    const vendidos = allLeads.filter((l) => l.status === 'cerrado_ganado');
+    const montoVendido = vendidos.reduce((s, l) => s + (l.amount || 0), 0);
+    const tasaCierre = total ? Math.round((vendidos.length / total) * 1000) / 10 : 0;
+    kpisEl.innerHTML = [
+      kpiTile('Total Leads', total, 'En el rango filtrado', 'group'),
+      kpiTile('Vendidos', vendidos.length, `${tasaCierre}% de conversión`, 'task_alt', 'text-secondary'),
+      kpiTile('Monto Vendido', formatMoney(montoVendido), 'Ventas cerradas del rango', 'payments', 'text-secondary'),
+      kpiTile('Tasa de Cierre', `${tasaCierre}%`, 'Vendidos sobre el total', 'percent'),
+    ].join('');
+
+    renderLeadKanban(boardWrap, allLeads, ctx, load);
+  }
+
+  async function load() {
+    try {
+      allLeads = await ctx.api.get(`/api/leads${buildQuery()}`);
+    } catch (err) {
+      ctx.toast('No se pudieron cargar los leads', 'error');
+      return;
+    }
+    renderCurrent();
+  }
+
+  let searchDebounce;
+  searchInput.addEventListener('input', () => {
+    clearTimeout(searchDebounce);
+    searchDebounce = setTimeout(() => {
+      searchQuery = searchInput.value.trim();
+      load();
+    }, 300);
+  });
+
+  container.querySelector('#refresh-btn').addEventListener('click', load);
+  container.querySelector('#export-xlsx-btn')?.addEventListener('click', () => {
+    // Mismos filtros que el tablero en pantalla (buildQuery), solo que en vez
+    // de pintar tarjetas arma un .xlsx para descargar -- "lo que ves es lo
+    // que exportas". Se abre en pestaña nueva porque es una descarga de
+    // archivo, no una navegacion dentro de la SPA.
+    window.open(`/api/leads/xlsx${buildQuery()}`, '_blank');
+  });
+  filterEstado.addEventListener('change', updateDateFilterLabels);
+  [filterEstado, filterFecha].forEach((el) => {
+    el.addEventListener('change', load);
+  });
+  container.querySelector('#filter-clear').addEventListener('click', () => {
+    filterEstado.value = '';
+    filterFecha.value = '';
+    updateDateFilterLabels();
+    load();
+  });
+
+  if (form) form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const client_name = container.querySelector('#f-nombre').value.trim();
+    const phone = container.querySelector('#f-telefono').value.trim();
+    const document_ = container.querySelector('#f-documento').value.trim();
+    const email = container.querySelector('#f-correo').value.trim();
+    const address = container.querySelector('#f-direccion').value.trim();
+    const advisor_id = asesorSelect.value;
+    const product = productoSelect.value === 'Otro' ? productoOtro.value.trim() || 'Otro' : productoSelect.value;
+    const source = container.querySelector('#f-source').value;
+    const city = container.querySelector('#f-ciudad').value;
+    const notes = container.querySelector('#f-notas').value.trim();
+    const fechaWrap = container.querySelector('#fecha-wrap');
+    const created_at = !fechaWrap.classList.contains('hidden') ? container.querySelector('#f-fecha').value : '';
+    if (!client_name || !phone) {
+      ctx.toast('Nombre y teléfono son obligatorios', 'error');
+      return;
+    }
+    if (!advisor_id) {
+      ctx.toast('Selecciona a qué asesor asignar el cliente', 'error');
+      return;
+    }
+    try {
+      // Si no se eligio un cliente existente de las sugerencias, se crea uno
+      // nuevo con estos mismos datos -- asi todo lead que se registre de
+      // ahora en adelante queda vinculado a una ficha en Clientes, sin
+      // pedirle un paso extra a quien esta registrando.
+      let client_id = selectedClientId;
+      if (!client_id) {
+        const client = await ctx.api.post('/api/clients', { name: client_name, phone, document: document_, email, address });
+        client_id = client.id;
+      }
+      const lead = await ctx.api.post('/api/leads', { client_name, phone, document: document_, advisor_id, product, source, city, notes, created_at, client_id });
+      ctx.toast(`Registrado y asignado a ${lead.advisor_name}`, 'success');
+      form.reset();
+      productoSelect.value = PRODUCTS[0];
+      productoOtro.value = '';
+      productoOtro.classList.add('hidden');
+      container.querySelector('#f-source').value = DEFAULT_SOURCE;
+      container.querySelector('#f-ciudad').value = '';
+      fechaWrap.classList.add('hidden');
+      selectedClientId = null;
+      clienteHint.classList.add('hidden');
+      setAltaRapidaVisible(false);
+      load();
+      loadAdvisorOptions();
+    } catch (err) {
+      ctx.toast(err.message, 'error');
+    }
+  });
+
+  const unmountNotif = mountNotifBell(container.querySelector('#ventas-notif-mount'), ctx);
+
+  // El turno sugerido depende tanto de leads (calls_today, vencidos) como de
+  // asesores (pausados, semaforo forzado a mano), asi que se recalcula ante
+  // cualquiera de los dos eventos, no solo advisors_changed.
+  const offLeads = ctx.ws.on('leads_changed', () => {
+    load();
+    loadAdvisorOptions();
+  });
+  const offAdvisors = ctx.ws.on('advisors_changed', loadAdvisorOptions);
+  await Promise.all([load(), loadAdvisorOptions()]);
+
+  return () => {
+    offLeads();
+    offAdvisors();
+    unmountNotif();
+  };
+}

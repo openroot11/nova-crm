@@ -1,0 +1,27 @@
+# Dependencias
+node_modules/
+
+# Base de datos local y respaldos (nunca al repo)
+server/data/
+server/backups/
+server/logs/
+*.db
+*.db-shm
+*.db-wal
+
+# Secretos
+server/.env
+
+# Carpetas de respaldo manual previas
+_backup_pre_*/
+_ads_pdfs/
+
+# Binarios sueltos / adjuntos de trabajo
+*.zip
+"Captura de pantalla"*.png
+"CamScanner"*
+
+# Sistema
+.DS_Store
+Thumbs.db
+desktop.ini

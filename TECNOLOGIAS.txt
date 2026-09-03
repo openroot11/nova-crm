@@ -1,0 +1,66 @@
+NOVA CRM - TECNOLOGIAS USADAS EN EL PROYECTO
+=============================================
+
+RESUMEN
+-------
+Aplicacion web local (LAN), sin nube: un servidor Node.js sirve tanto la API
+como los archivos del frontend. Base de datos SQLite en un solo archivo.
+No usa frameworks de frontend (React/Vue/Angular) ni build step (Webpack/
+Vite): JavaScript plano con modulos ES nativos del navegador.
+
+
+BACKEND (carpeta server/)
+--------------------------
+- Node.js (version 22.5.0 o superior)
+- Express 4 - framework web / servidor HTTP y API REST
+- express-session - sesiones de usuario (en memoria del proceso)
+- express-async-errors - manejo de errores en rutas async
+- node:sqlite (DatabaseSync) - driver nativo de SQLite incluido en Node,
+  no es una libreria de npm aparte
+- ws - WebSockets, para actualizaciones en vivo (leads_changed, etc.)
+  sin tener que refrescar la pagina
+- node-cron - tareas programadas (respaldo semanal automatico)
+- xlsx (SheetJS) - generar y leer archivos Excel (exportar Ventas,
+  Ventas Cerradas, importar datos historicos)
+- dotenv - variables de entorno (.env)
+
+Base de datos: SQLite (un solo archivo en server/data/nova_crm.db),
+modo WAL para lecturas/escrituras concurrentes.
+
+
+FRONTEND (carpeta public/)
+----------------------------
+- JavaScript "vanilla" con modulos ES (import/export nativos del
+  navegador, sin React/Vue/Angular ni compilador)
+- Router propio hecho a mano (basado en el hash de la URL, #/ruta)
+- Tailwind CSS (via CDN, con el plugin Play/JIT) - los colores, tipografia
+  y espaciados de la marca estan definidos como un tema Tailwind a medida
+  dentro de public/index.html (paleta roja de Manufacturas y Disenos Nova)
+- Material Symbols Outlined (Google Fonts) - todos los iconos de la
+  interfaz
+- Inter (Google Fonts) - tipografia de toda la app
+- Chart.js - graficas (barras, dona, comparativos)
+- chartjs-chart-sankey - el diagrama de flujo (Sankey) de Estadisticas
+- html2canvas - exportar el recuadro del Informe Diario como imagen PNG
+  descargable
+
+Todas las librerias del frontend se cargan por CDN directamente en
+index.html (no hay carpeta node_modules para el frontend).
+
+
+ARQUITECTURA / OTROS DETALLES
+-------------------------------
+- Autenticacion por sesion (cookie), con roles: admin, coordinador, asesor
+  - cada ruta del backend valida el rol antes de dejar pasar la accion.
+- Tiempo real: el servidor avisa por WebSocket cuando algo cambia
+  (nuevo lead, venta cerrada, reasignacion, etc.) y las pantallas
+  abiertas se refrescan solas.
+- Todas las fechas se guardan en UTC en la base de datos; el frontend
+  las convierte a hora de Colombia (UTC-5 fijo) para mostrarlas.
+- Respaldo automatico semanal de toda la base de datos a un archivo
+  JSON (carpeta server/backups/).
+- Sin dependencias de pago ni servicios en la nube: todo corre en la
+  PC/red local de la empresa.
+
+
+Generado automaticamente por Claude a partir del codigo del proyecto.
