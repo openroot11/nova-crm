@@ -171,8 +171,9 @@ async function resolveSalesperson(advisorName) {
   return uid;
 }
 
-// Cada asesor del CRM tiene su propio equipo de ventas (crm.team) en Odoo,
-// con el mismo nombre ("Harol", "Oscar", "Roberto"). Se cachea.
+// Empareja un asesor del CRM con su equipo de ventas en Odoo por nombre.
+// Solo se usa como respaldo: lo normal es tener el id guardado en la fila del
+// asesor (advisors.odoo_team_id) porque el Odoo del equipo usa otros nombres.
 const _teamCache = new Map();
 
 async function resolveAdvisorTeam(advisorName) {
@@ -186,18 +187,14 @@ async function resolveAdvisorTeam(advisorName) {
 }
 
 // Cambia el vendedor + el equipo de una oportunidad (al asignar/reasignar un
-// lead a otro asesor en el CRM). Best-effort: si el asesor no existe en Odoo
-// no lanza, solo devuelve updated:false.
-async function setOpportunityOwner(opportunityId, advisorName) {
+// lead a otro asesor en el CRM). `owner` = { user_id, team_id } (ids de Odoo,
+// pueden venir null). Best-effort: si no hay nada que escribir, updated:false.
+async function setOpportunityOwner(opportunityId, owner = {}) {
   if (!opportunityId) return { updated: false };
-  const [userId, teamId] = await Promise.all([
-    resolveSalesperson(advisorName).catch(() => null),
-    resolveAdvisorTeam(advisorName).catch(() => null),
-  ]);
   const vals = {};
-  if (userId) vals.user_id = userId;
-  if (teamId) vals.team_id = teamId;
-  if (!Object.keys(vals).length) return { updated: false, reason: `asesor "${advisorName}" no encontrado en Odoo` };
+  if (owner.user_id) vals.user_id = owner.user_id;
+  if (owner.team_id) vals.team_id = owner.team_id;
+  if (!Object.keys(vals).length) return { updated: false, reason: 'sin usuario ni equipo de Odoo para ese asesor' };
   await callKw('crm.lead', 'write', [[opportunityId], vals]);
   return { updated: true, ...vals };
 }
@@ -226,7 +223,10 @@ async function createLead({ name, partner_id, contact_name, phone, email, descri
 // ---------------------------------------------------------------------------
 async function listProducts(query) {
   const domain = [['sale_ok', '=', true]];
-  if (query && query.trim()) domain.push(['name', 'ilike', query.trim()]);
+  if (query && query.trim()) {
+    const q = query.trim();
+    domain.push('|', ['name', 'ilike', q], ['default_code', 'ilike', q]);
+  }
   return callKw('product.product', 'search_read', [domain], {
     fields: ['id', 'display_name', 'list_price', 'uom_id', 'default_code'],
     limit: 100,
@@ -346,45 +346,91 @@ const STAGE_NAMES = {
   contacted: process.env.ODOO_STAGE_CONTACTED || 'Contactado',
   quoted: process.env.ODOO_STAGE_QUOTED || 'Cotizado',
   won: process.env.ODOO_STAGE_WON || 'Ganado',
+  // Etapa(s) de "perdido/declinado" -- lista separada por coma, opcional.
+  lost: (process.env.ODOO_STAGE_LOST || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean),
 };
 
 function stageNames() {
-  return { ...STAGE_NAMES };
+  return { ...STAGE_NAMES, lost: [...STAGE_NAMES.lost] };
 }
 
-const _stageCache = new Map(); // clave -> id
+// Lee TODAS las etapas del pipeline una vez y ubica las "anclas" del embudo
+// Nova por nombre (o is_won para "won"). El pipeline del equipo tiene 9 etapas;
+// se mapea por posición: una oportunidad en cualquier etapa >= "cotizado" (y no
+// ganada) cuenta como cotizada. Cacheado.
+let _anchorsPromise = null;
 
-async function _stageIdByName(name) {
-  const key = 'name:' + String(name || '').trim().toLowerCase();
-  if (!key) return null;
-  if (_stageCache.has(key)) return _stageCache.get(key);
-  const ids = await callKw('crm.stage', 'search', [[['name', '=ilike', String(name).trim()]]], { limit: 1 });
-  const id = ids.length ? ids[0] : null;
-  _stageCache.set(key, id);
-  return id;
+function _resolveAnchors() {
+  if (_anchorsPromise) return _anchorsPromise;
+  _anchorsPromise = (async () => {
+    const stages = await callKw('crm.stage', 'search_read', [[]], { fields: ['name', 'sequence', 'is_won'], order: 'sequence' });
+    const norm = (s) => String(s || '').trim().toLowerCase();
+    const byName = (n) => stages.find((s) => norm(s.name) === norm(n));
+    const wonStage = stages.find((s) => s.is_won) || byName(STAGE_NAMES.won);
+    const assigned = byName(STAGE_NAMES.assigned) || stages[0];
+    const contacted = byName(STAGE_NAMES.contacted);
+    const quoted = byName(STAGE_NAMES.quoted);
+    const lostSet = new Set(STAGE_NAMES.lost.map(norm));
+    const lostIds = new Set(stages.filter((s) => lostSet.has(norm(s.name))).map((s) => s.id));
+    return {
+      stages,
+      byId: Object.fromEntries(stages.map((s) => [s.id, s])),
+      assignedSeq: assigned ? assigned.sequence : -Infinity,
+      contactedSeq: contacted ? contacted.sequence : Infinity, // si no existe, nunca "contactado" por seq
+      quotedSeq: quoted ? quoted.sequence : Infinity,
+      wonId: wonStage ? wonStage.id : null,
+      contactedId: contacted ? contacted.id : null,
+      quotedId: quoted ? quoted.id : null,
+      assignedId: assigned ? assigned.id : null,
+      lostIds,
+      lostId: lostIds.size ? [...lostIds][0] : null,
+      resolved: { contacted: !!contacted, quoted: !!quoted },
+    };
+  })().catch((err) => {
+    _anchorsPromise = null; // reintentar la próxima vez
+    throw err;
+  });
+  return _anchorsPromise;
 }
 
-async function _stageIdForKey(stageKey) {
-  if (stageKey === 'won') {
-    if (_stageCache.has('won')) return _stageCache.get('won');
-    let ids = await callKw('crm.stage', 'search', [[['is_won', '=', true]]], { limit: 1 });
-    if (!ids.length) ids = await callKw('crm.stage', 'search', [[['name', '=ilike', STAGE_NAMES.won]]], { limit: 1 });
-    const id = ids.length ? ids[0] : null;
-    _stageCache.set('won', id);
-    return id;
-  }
-  return _stageIdByName(STAGE_NAMES[stageKey] || stageKey);
+async function stageAnchors() {
+  return _resolveAnchors();
 }
 
 // Mueve la oportunidad al paso del embudo indicado ('assigned' | 'contacted' |
-// 'quoted' | 'won'). Best-effort: si no encuentra la etapa, no lanza -- el CRM
-// sigue siendo la fuente de verdad del embudo.
+// 'quoted' | 'won' | 'lost'). 'contacted'/'quoted' SOLO AVANZAN: si la
+// oportunidad ya está igual o más adelante, no se toca (para no pisar una
+// etapa más específica que el asesor haya puesto en Odoo, ej. "COTIZADO
+// CALIENTE"). 'won' y 'lost' son cierres: siempre se fijan.
+// Best-effort: si no encuentra la etapa, no lanza.
 async function moveOpportunityStage(opportunityId, stageKey) {
   if (!opportunityId) return { moved: false };
-  const stageId = await _stageIdForKey(stageKey);
-  if (!stageId) return { moved: false, reason: `no se encontró la etapa para "${stageKey}" en Odoo` };
-  await callKw('crm.lead', 'write', [[opportunityId], { stage_id: stageId }]);
-  return { moved: true, stage_id: stageId };
+  let a;
+  try {
+    a = await _resolveAnchors();
+  } catch (err) {
+    return { moved: false, reason: `no se pudieron leer las etapas: ${err.message}` };
+  }
+  const isClose = stageKey === 'won' || stageKey === 'lost';
+  const targetId =
+    stageKey === 'won' ? a.wonId
+    : stageKey === 'lost' ? a.lostId
+    : stageKey === 'quoted' ? a.quotedId
+    : stageKey === 'contacted' ? a.contactedId
+    : a.assignedId;
+  if (!targetId) return { moved: false, reason: `no se encontró la etapa para "${stageKey}" en Odoo` };
+  const targetSeq = a.byId[targetId].sequence;
+
+  if (!isClose) {
+    const [opp] = await callKw('crm.lead', 'read', [[opportunityId], ['stage_id']]);
+    const curSeq = opp && Array.isArray(opp.stage_id) ? (a.byId[opp.stage_id[0]] ? a.byId[opp.stage_id[0]].sequence : -Infinity) : -Infinity;
+    if (curSeq >= targetSeq) return { moved: false, reason: 'la oportunidad ya está en esa etapa o más adelante' };
+  }
+  await callKw('crm.lead', 'write', [[opportunityId], { stage_id: targetId }]);
+  return { moved: true, stage_id: targetId };
 }
 
 async function markQuotationSent(id) {
@@ -421,6 +467,7 @@ module.exports = {
   resolveAdvisorTeam,
   setOpportunityOwner,
   stageNames,
+  stageAnchors,
   findOrCreatePartner,
   createLead,
   listProducts,

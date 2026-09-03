@@ -264,6 +264,13 @@ async function init() {
   ensureColumn('leads', 'odoo_lead_id', 'INTEGER');
   ensureColumn('leads', 'odoo_order_id', 'INTEGER');
   ensureColumn('clients', 'odoo_partner_id', 'INTEGER');
+  // Emparejamiento explicito asesor del CRM <-> usuario y equipo de ventas en
+  // Odoo. El Odoo del equipo tiene nombres distintos ("HAROLD SAN JUAN LECHUGA",
+  // equipo "HAROL SAN JUAN") a los del CRM ("Harol"), asi que adivinar por
+  // nombre no sirve -- se guardan los ids resueltos (ver scripts/odoo-setup.js
+  // y routes/advisors.js). NULL = caer al emparejamiento por nombre.
+  ensureColumn('advisors', 'odoo_user_id', 'INTEGER');
+  ensureColumn('advisors', 'odoo_team_id', 'INTEGER');
   await seedIfEmpty();
 }
 

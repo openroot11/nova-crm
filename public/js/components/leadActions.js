@@ -219,18 +219,11 @@ async function fetchOdooStatus(ctx) {
   }
 }
 
-async function fetchOdooProducts(ctx) {
-  const products = await ctx.api.get('/api/odoo/products');
-  if (!products.length) throw new Error('Odoo no tiene productos vendibles cargados');
-  return products;
-}
-
 // Editor reutilizable de líneas de producto (crear cotización / editar borrador).
-// Pinta dentro de `host` y devuelve helpers. `initialLines`: [{ product_id, qty, price_unit }].
-function mountQuotationLineEditor(host, products, initialLines, opts = {}) {
-  const optionsHtml = products
-    .map((p) => `<option value="${p.id}" data-price="${p.price}">${escapeHtml(p.name)}</option>`)
-    .join('');
+// El catálogo de Odoo puede tener cientos de productos, así que cada línea tiene
+// un buscador que consulta /api/odoo/products?q= en vivo.
+// `initialLines`: [{ product_id, product_name, qty, price_unit }].
+function mountQuotationLineEditor(host, ctx, initialLines, opts = {}) {
   host.innerHTML = `
     <div data-lines class="space-y-2 mb-2"></div>
     <button type="button" data-add class="btn btn-secondary text-[12px] mb-4">
@@ -252,13 +245,12 @@ function mountQuotationLineEditor(host, products, initialLines, opts = {}) {
 
   function readRaw() {
     return [...linesEl.querySelectorAll('[data-line]')].map((row) => {
-      const opt = row.querySelector('[data-prod]').selectedOptions[0];
       const priceRaw = row.querySelector('[data-price]').value;
       return {
-        product_id: Number(row.querySelector('[data-prod]').value),
+        product_id: Number(row.querySelector('[data-prod]').value) || 0,
         qty: Number(row.querySelector('[data-qty]').value) || 0,
         price_unit: priceRaw === '' ? undefined : Number(priceRaw),
-        _listPrice: Number(opt?.dataset.price || 0),
+        _listPrice: Number(row.dataset.listPrice || 0),
       };
     });
   }
@@ -269,30 +261,80 @@ function mountQuotationLineEditor(host, products, initialLines, opts = {}) {
   function lineRow(preset) {
     const row = document.createElement('div');
     row.dataset.line = '';
-    row.className = 'grid grid-cols-[1fr_5rem_8rem_auto] gap-2 items-center';
+    if (preset && preset.price_unit != null) row.dataset.listPrice = Math.round(preset.price_unit);
+    row.className = 'grid grid-cols-[1fr_4.5rem_8rem_auto] gap-2 items-start';
     row.innerHTML = `
-      <select data-prod class="p-2 border border-outline-variant rounded-md outline-none focus:border-outline text-body-sm">${optionsHtml}</select>
+      <div class="relative">
+        <input data-prod-search type="text" autocomplete="off" placeholder="Buscar producto…" class="w-full p-2 border border-outline-variant rounded-md outline-none focus:border-outline text-body-sm" />
+        <input data-prod type="hidden" />
+        <div data-prod-results class="hidden absolute z-30 mt-1 w-full bg-surface border border-outline-variant rounded-md shadow-lg max-h-52 overflow-y-auto"></div>
+      </div>
       <input data-qty class="p-2 border border-outline-variant rounded-md outline-none focus:border-outline text-body-sm" type="number" min="0" step="1" value="1" />
       <input data-price class="p-2 border border-outline-variant rounded-md outline-none focus:border-outline text-body-sm" type="number" min="0" step="1000" placeholder="precio lista" />
       <button type="button" data-del class="btn btn-icon" aria-label="Quitar"><span class="material-symbols-outlined">delete</span></button>
     `;
-    const prod = row.querySelector('[data-prod]');
+    const search = row.querySelector('[data-prod-search]');
+    const hidden = row.querySelector('[data-prod]');
+    const results = row.querySelector('[data-prod-results]');
     const qty = row.querySelector('[data-qty]');
     const price = row.querySelector('[data-price]');
-    const syncPlaceholder = () => {
-      const opt = prod.selectedOptions[0];
-      price.placeholder = opt ? Number(opt.dataset.price || 0).toLocaleString('es-CO') : 'precio lista';
-    };
-    if (preset) {
-      if (preset.product_id && prod.querySelector(`option[value="${preset.product_id}"]`)) prod.value = String(preset.product_id);
-      if (preset.qty != null) qty.value = preset.qty;
-      if (preset.price_unit != null) price.value = Math.round(preset.price_unit);
+
+    function pick(p) {
+      hidden.value = p.id;
+      search.value = p.name;
+      row.dataset.listPrice = p.price || 0;
+      price.placeholder = p.price ? Number(p.price).toLocaleString('es-CO') : 'precio lista';
+      results.classList.add('hidden');
+      recalc();
     }
-    prod.addEventListener('change', () => { syncPlaceholder(); recalc(); });
+
+    let deb;
+    search.addEventListener('input', () => {
+      hidden.value = ''; // cambió el texto -> ya no hay producto elegido hasta que pinche uno
+      clearTimeout(deb);
+      const term = search.value.trim();
+      if (term.length < 2) {
+        results.classList.add('hidden');
+        return;
+      }
+      deb = setTimeout(async () => {
+        let list = [];
+        try {
+          list = await ctx.api.get(`/api/odoo/products?q=${encodeURIComponent(term)}`);
+        } catch {
+          return;
+        }
+        if (!list.length) {
+          results.innerHTML = '<p class="px-3 py-2 text-[11px] text-on-surface-variant">Sin resultados</p>';
+          results.classList.remove('hidden');
+          return;
+        }
+        results.innerHTML = list
+          .slice(0, 30)
+          .map(
+            (p) =>
+              `<button type="button" data-pid="${p.id}" data-pname="${escapeHtml(p.name)}" data-pprice="${p.price || 0}" class="w-full text-left px-3 py-1.5 hover:bg-surface-container-low text-body-sm flex justify-between gap-2"><span class="truncate">${escapeHtml(p.name)}</span>${p.price ? `<span class="shrink-0 text-on-surface-variant">${money(p.price)}</span>` : ''}</button>`
+          )
+          .join('');
+        results.classList.remove('hidden');
+      }, 250);
+    });
+    results.addEventListener('click', (e) => {
+      const b = e.target.closest('button[data-pid]');
+      if (!b) return;
+      pick({ id: Number(b.dataset.pid), name: b.dataset.pname, price: Number(b.dataset.pprice) });
+    });
+    search.addEventListener('blur', () => setTimeout(() => results.classList.add('hidden'), 150));
     qty.addEventListener('input', recalc);
     price.addEventListener('input', recalc);
     row.querySelector('[data-del]').addEventListener('click', () => { row.remove(); recalc(); });
-    syncPlaceholder();
+
+    if (preset) {
+      if (preset.product_id) hidden.value = preset.product_id;
+      if (preset.product_name) search.value = preset.product_name;
+      if (preset.qty != null) qty.value = preset.qty;
+      if (preset.price_unit != null) price.value = Math.round(preset.price_unit);
+    }
     linesEl.appendChild(row);
     recalc();
   }
@@ -360,14 +402,6 @@ export async function openQuotationModal(lead, ctx, onDone) {
   // Si el lead ya tiene una cotización en Odoo, no crear otra: abrir la vista.
   if (lead.odoo_order_id) return openQuotationViewModal(lead, ctx, onDone);
 
-  let products;
-  try {
-    products = await fetchOdooProducts(ctx);
-  } catch (err) {
-    ctx.toast(err.message, 'error');
-    return;
-  }
-
   openModal({
     title: `Cotización en Odoo · ${escapeHtml(lead.client_name)}`,
     wide: true,
@@ -379,7 +413,7 @@ export async function openQuotationModal(lead, ctx, onDone) {
           <button type="button" data-ok class="btn btn-primary">Crear cotización</button>
         </div>
       `;
-      const editor = mountQuotationLineEditor(body.querySelector('[data-editor]'), products);
+      const editor = mountQuotationLineEditor(body.querySelector('[data-editor]'), ctx);
       body.querySelector('[data-cancel]').addEventListener('click', close);
       const okBtn = body.querySelector('[data-ok]');
       okBtn.addEventListener('click', async () => {
@@ -474,16 +508,10 @@ export async function openQuotationViewModal(lead, ctx, onDone) {
           close();
           openCloseModal({ ...lead, odoo_order_id: q.id, sale_reference: q.name, amount: q.amount_total }, ctx, onDone);
         });
-        body.querySelector('[data-edit]')?.addEventListener('click', async () => {
-          let products;
-          try {
-            products = await fetchOdooProducts(ctx);
-          } catch (err) {
-            ctx.toast(err.message, 'error');
-            return;
-          }
+        body.querySelector('[data-edit]')?.addEventListener('click', () => {
           const initial = q.lines.map((l) => ({
             product_id: Array.isArray(l.product_id) ? l.product_id[0] : null,
+            product_name: Array.isArray(l.product_id) ? l.product_id[1] : l.name,
             qty: l.product_uom_qty,
             price_unit: l.price_unit,
           }));
@@ -494,7 +522,7 @@ export async function openQuotationViewModal(lead, ctx, onDone) {
               <button type="button" data-save-edit class="btn btn-primary">Guardar líneas</button>
             </div>
           `;
-          const editor = mountQuotationLineEditor(body.querySelector('[data-editor]'), products, initial, { hideValidity: true });
+          const editor = mountQuotationLineEditor(body.querySelector('[data-editor]'), ctx, initial, { hideValidity: true });
           body.querySelector('[data-cancel-edit]').addEventListener('click', () => showView(q));
           const saveBtn = body.querySelector('[data-save-edit]');
           saveBtn.addEventListener('click', async () => {

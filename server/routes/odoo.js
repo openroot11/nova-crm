@@ -44,31 +44,19 @@ router.get('/products', async (req, res) => {
 router.get('/stages', async (req, res) => {
   if (!odoo.isEnabled()) return res.status(409).json({ error: 'Odoo no configurado' });
   try {
-    const stages = await odoo.callKw('crm.stage', 'search_read', [[]], {
-      fields: ['name', 'sequence', 'is_won'],
-      order: 'sequence',
-    });
+    const a = await odoo.stageAnchors();
     const names = odoo.stageNames();
-    const norm = (s) => String(s || '').trim().toLowerCase();
-    const known = new Set([names.assigned, names.contacted, names.quoted, names.won].map(norm));
+    const mapsTo = (s) => {
+      if (a.lostIds.has(s.id)) return 'perdido';
+      if (s.is_won) return 'ganado (cierre manual)';
+      if (s.sequence >= a.quotedSeq) return 'cotizado';
+      if (s.sequence >= a.contactedSeq) return 'contactado';
+      return 'asignado';
+    };
     res.json({
       expected: names,
-      stages: stages.map((s) => ({
-        name: s.name,
-        is_won: s.is_won,
-        maps_to: s.is_won
-          ? 'ganado'
-          : norm(s.name) === norm(names.quoted)
-          ? 'cotizado'
-          : norm(s.name) === norm(names.contacted)
-          ? 'contactado'
-          : norm(s.name) === norm(names.assigned)
-          ? 'asignado'
-          : null,
-      })),
-      // true si el CRM reconoce al menos "contactado" y "cotizado" en el pipeline
-      mapping_ok: [names.contacted, names.quoted].every((n) => stages.some((s) => norm(s.name) === norm(n))),
-      unknown_present: stages.some((s) => !s.is_won && !known.has(norm(s.name))),
+      stages: a.stages.map((s) => ({ name: s.name, is_won: s.is_won, maps_to: mapsTo(s) })),
+      mapping_ok: a.resolved.contacted && a.resolved.quoted,
     });
   } catch (err) {
     res.status(502).json({ error: `Odoo: ${err.message}` });

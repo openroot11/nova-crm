@@ -41,18 +41,21 @@ function nowUtc() {
   return new Date().toISOString().replace('T', ' ').slice(0, 19);
 }
 
-const norm = (s) => String(s || '').trim().toLowerCase();
-
 // Oportunidad de Odoo -> estado objetivo en el CRM (o null = no tocar).
-// El nombre de la etapa de "contactado"/"cotizado" se configura en server/.env
-// (odoo.stageNames()); "ganado" se detecta por is_won.
-function targetStatus(opp, stageInfo, names) {
+// Se mapea por POSICIÓN de la etapa (secuencia), no por nombre exacto: el
+// pipeline del equipo tiene ~9 etapas y varias son "post-cotización"
+// (seguimiento, cotizado caliente, no responde...). Cualquier etapa >= la
+// ancla "cotizado" y que no sea la ganada cuenta como cotizada.
+// Anclas configurables en server/.env (ODOO_STAGE_*); "ganado" = is_won.
+function targetStatus(opp, anchors) {
   if (opp.active === false) return 'cerrado_perdido';
-  const st = Array.isArray(opp.stage_id) ? stageInfo[opp.stage_id[0]] : null;
+  const stageId = Array.isArray(opp.stage_id) ? opp.stage_id[0] : null;
+  if (stageId && anchors.lostIds.has(stageId)) return 'cerrado_perdido'; // etapa "DECLINADO" y similares
+  const st = stageId ? anchors.byId[stageId] : null;
   if (st && st.is_won) return null; // "Ganado" se cierra desde el CRM
-  const name = norm(st && st.name);
-  if (name && name === norm(names.quoted)) return 'cotizado';
-  if (name && name === norm(names.contacted)) return 'contactado';
+  const seq = st ? st.sequence : -Infinity;
+  if (seq >= anchors.quotedSeq) return 'cotizado';
+  if (seq >= anchors.contactedSeq) return 'contactado';
   return 'asignado';
 }
 
@@ -92,26 +95,22 @@ async function syncOnce() {
 
     const byOppId = new Map(leads.map((l) => [l.odoo_lead_id, l]));
 
+    const anchors = await odoo.stageAnchors();
+    if (!anchors.resolved.contacted || !anchors.resolved.quoted) {
+      return { error: `el CRM no reconoce las etapas de Odoo (revisa ODOO_STAGE_CONTACTED / ODOO_STAGE_QUOTED en server/.env)` };
+    }
+
     // active_test:false para ver también las oportunidades archivadas (perdidas).
     const opps = await odoo.callKw('crm.lead', 'read', [[...byOppId.keys()], ['stage_id', 'active']], {
       context: { active_test: false },
     });
-
-    // Una sola lectura de las etapas involucradas (nombre + is_won).
-    const stageIds = [...new Set(opps.filter((o) => Array.isArray(o.stage_id)).map((o) => o.stage_id[0]))];
-    const stageInfo = {};
-    if (stageIds.length) {
-      const stages = await odoo.callKw('crm.stage', 'read', [stageIds, ['name', 'is_won']]);
-      for (const s of stages) stageInfo[s.id] = s;
-    }
-    const names = odoo.stageNames();
 
     let updated = 0;
     const changedLeadIds = [];
     for (const opp of opps) {
       const lead = byOppId.get(opp.id);
       if (!lead) continue;
-      const target = targetStatus(opp, stageInfo, names);
+      const target = targetStatus(opp, anchors);
       if (!target) continue;
       if (applyToLead(lead, target)) {
         updated++;

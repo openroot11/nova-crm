@@ -123,10 +123,35 @@ function predictLeadScore(lead, advisorRate = 0) {
 // ---------------------------------------------------------------------------
 //  Sincronizacion con Odoo (ver server/odoo.js)
 // ---------------------------------------------------------------------------
+// Usuario + equipo de ventas en Odoo de un asesor del CRM. Prefiere los ids
+// guardados en la fila del asesor (advisors.odoo_user_id / odoo_team_id, los
+// deja scripts/odoo-setup.js); si no los tiene, cae al emparejamiento por
+// nombre (solo sirve si el Odoo usa los mismos nombres que el CRM).
+async function advisorOdooOwner(advisor) {
+  if (!advisor || advisor.is_group) return {};
+  let user_id = advisor.odoo_user_id || null;
+  let team_id = advisor.odoo_team_id || null;
+  if (!user_id) {
+    try {
+      user_id = await odoo.resolveSalesperson(advisor.name);
+    } catch (e) {
+      console.error('[odoo] no se pudo resolver el asesor', advisor.name, e.message);
+    }
+  }
+  if (!team_id) {
+    try {
+      team_id = await odoo.resolveAdvisorTeam(advisor.name);
+    } catch (e) {
+      /* best-effort */
+    }
+  }
+  return { user_id: user_id || undefined, team_id: team_id || undefined };
+}
+
 // Crea/deduplica el contacto y crea la oportunidad en Odoo para un lead del
-// CRM, y guarda los ids resultantes en la fila del lead. Best-effort: si
-// Odoo falla, el lead ya quedo creado en el CRM y esto solo lo deja sin
-// enlazar (se puede reintentar despues, ej. al cotizar).
+// CRM, y guarda los ids resultantes en la fila del lead. Best-effort: si Odoo
+// falla, el lead ya quedo creado en el CRM y esto solo lo deja sin enlazar
+// (se puede reintentar despues, ej. al cotizar).
 async function syncLeadToOdoo(leadId) {
   if (!odoo.isEnabled()) return { synced: false, skipped: true };
   const lead = await db.prepare('SELECT * FROM leads WHERE id = ?').get(leadId);
@@ -147,20 +172,7 @@ async function syncLeadToOdoo(leadId) {
       city: lead.city || null,
       street: (client && client.address) || null,
     });
-    // Emparejar el asesor del CRM con su usuario y su equipo de ventas en Odoo
-    // (cada asesor tiene su propio crm.team con su mismo nombre).
-    let salespersonId = null;
-    let teamId = null;
-    if (advisor && !advisor.is_group) {
-      try {
-        [salespersonId, teamId] = await Promise.all([
-          odoo.resolveSalesperson(advisor.name),
-          odoo.resolveAdvisorTeam(advisor.name),
-        ]);
-      } catch (e) {
-        console.error('[odoo] no se pudo resolver el asesor', advisor.name, e.message);
-      }
-    }
+    const owner = await advisorOdooOwner(advisor);
     const odooLeadId = await odoo.createLead({
       name: `${lead.product || 'Oportunidad'} - ${lead.client_name}`,
       partner_id: partner.id,
@@ -168,8 +180,8 @@ async function syncLeadToOdoo(leadId) {
       email: (client && client.email) || null,
       description: lead.notes || null,
       city: lead.city || null,
-      user_id: salespersonId || undefined,
-      team_id: teamId || undefined,
+      user_id: owner.user_id,
+      team_id: owner.team_id,
     });
     await db
       .prepare('UPDATE leads SET odoo_partner_id = ?, odoo_lead_id = ? WHERE id = ?')
@@ -198,12 +210,13 @@ async function pushOdooStage(lead, stageKey) {
 
 // Al asignar/reasignar un lead a otro asesor en el CRM, mover la oportunidad
 // en Odoo al vendedor + equipo de ese asesor. Best-effort.
-async function pushOdooOwner(lead, advisorName) {
-  if (!odoo.isEnabled() || !lead || !lead.odoo_lead_id || !advisorName) return;
+async function pushOdooOwner(lead, advisor) {
+  if (!odoo.isEnabled() || !lead || !lead.odoo_lead_id || !advisor) return;
   try {
-    await odoo.setOpportunityOwner(lead.odoo_lead_id, advisorName);
+    const owner = await advisorOdooOwner(advisor);
+    await odoo.setOpportunityOwner(lead.odoo_lead_id, owner);
   } catch (err) {
-    console.error(`[odoo] lead ${lead.id}: no se pudo reasignar la oportunidad a "${advisorName}":`, err.message);
+    console.error(`[odoo] lead ${lead.id}: no se pudo reasignar la oportunidad a "${advisor.name}":`, err.message);
   }
 }
 
@@ -675,7 +688,7 @@ router.post('/:id/assign', requireRole('coordinador', 'admin'), async (req, res)
   // Si el lead ya está en Odoo, mover la oportunidad al vendedor + equipo del
   // nuevo asesor; si aún no está (fallo previo, integración recién activada),
   // crearla ahora ya con el asesor correcto.
-  if (updated.odoo_lead_id) await pushOdooOwner(updated, advisor.name);
+  if (updated.odoo_lead_id) await pushOdooOwner(updated, advisor);
   else await syncLeadToOdoo(id);
 
   broadcast('leads_changed', { reason: 'assigned', id });
@@ -947,7 +960,7 @@ router.post('/:id/reassign', async (req, res) => {
   await tx();
 
   const updated = await db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
-  if (updated.odoo_lead_id) await pushOdooOwner(updated, toAdvisor.name);
+  if (updated.odoo_lead_id) await pushOdooOwner(updated, toAdvisor);
   else await syncLeadToOdoo(id);
 
   broadcast('leads_changed', { reason: 'reassigned', id });
@@ -1007,7 +1020,12 @@ router.post('/:id/close', async (req, res) => {
         }
         await pushOdooStage(closedLead, 'won');
       } else if (closedLead.odoo_lead_id) {
-        await odoo.callKw('crm.lead', 'action_set_lost', [[closedLead.odoo_lead_id]]).catch(() => {});
+        // Perdido: mover a la etapa de "declinado" si está configurada
+        // (ODOO_STAGE_LOST); si no, archivar la oportunidad (action_set_lost).
+        const moved = await odoo.moveOpportunityStage(closedLead.odoo_lead_id, 'lost');
+        if (!moved.moved) {
+          await odoo.callKw('crm.lead', 'action_set_lost', [[closedLead.odoo_lead_id]]).catch(() => {});
+        }
       }
     } catch (err) {
       console.error(`[odoo] lead ${id}: no se pudo confirmar el pedido al cerrar:`, err.message);
