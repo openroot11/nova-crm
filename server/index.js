@@ -12,6 +12,7 @@ const { getSetting, setSetting, init } = require('./db');
 const realtime = require('./realtime');
 const { scheduleWeeklyBackup } = require('./backup');
 const { loadUser, requireRole, AUTH_DISABLED } = require('./middleware/auth');
+const odooSync = require('./odoo-sync');
 
 const PORT = process.env.PORT || 4000;
 
@@ -92,6 +93,7 @@ async function main() {
   const server = http.createServer(app);
   realtime.attach(server);
   scheduleWeeklyBackup();
+  odooSync.start(); // copia el estado del embudo de Odoo -> CRM cada ~30s
 
   server.listen(PORT, '0.0.0.0', () => {
     console.log('');

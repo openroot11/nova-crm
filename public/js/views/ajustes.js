@@ -95,9 +95,14 @@ export async function mount(container, ctx) {
               <span class="material-symbols-outlined text-on-surface-variant text-2xl">hub</span>
               <h3 class="text-headline-md font-headline-md text-on-surface">Conexión con Odoo</h3>
             </div>
-            <button id="odoo-test-btn" class="bg-surface-container hover:bg-surface-container-high text-on-surface px-4 py-2 rounded-lg text-label-bold font-label-bold border border-outline-variant transition-colors flex items-center gap-2">
-              <span class="material-symbols-outlined text-sm">wifi_tethering</span> Probar conexión
-            </button>
+            <div class="flex gap-2">
+              <button id="odoo-sync-btn" class="bg-surface-container hover:bg-surface-container-high text-on-surface px-4 py-2 rounded-lg text-label-bold font-label-bold border border-outline-variant transition-colors flex items-center gap-2">
+                <span class="material-symbols-outlined text-sm">sync</span> Sincronizar estados
+              </button>
+              <button id="odoo-test-btn" class="bg-surface-container hover:bg-surface-container-high text-on-surface px-4 py-2 rounded-lg text-label-bold font-label-bold border border-outline-variant transition-colors flex items-center gap-2">
+                <span class="material-symbols-outlined text-sm">wifi_tethering</span> Probar conexión
+              </button>
+            </div>
           </div>
           <div id="odoo-status" class="text-body-sm font-body-sm text-on-surface-variant">Cargando…</div>
           <p class="text-[11px] text-on-surface-variant mt-3">La conexión se configura en <code class="bg-surface-container px-1 rounded">server/.env</code> (ODOO_URL, ODOO_DB, ODOO_USER, ODOO_PASSWORD). Las cotizaciones y los pedidos de venta se crean en esta instancia de Odoo.</p>
@@ -205,7 +210,8 @@ export async function mount(container, ctx) {
         ${odooRow('Base de datos', s.db)}
         ${odooRow('Empresa', s.company)}
         ${odooRow('Usuario', `${s.user || ''}${s.login ? ` (${s.login})` : ''}`)}
-      </div>`;
+      </div>
+      <p class="mt-3 text-[11px] text-on-surface-variant">El CRM revisa Odoo cada ~30&nbsp;s y <strong>avanza</strong> el lead cuando la oportunidad pasa a Contactado, Cotizado o Perdido en Odoo. Retroceder una tarjeta en Odoo no retrocede el CRM; "Ganado" se cierra desde el CRM.</p>`;
   }
 
   odooTestBtn.addEventListener('click', async () => {
@@ -213,6 +219,25 @@ export async function mount(container, ctx) {
     await loadOdoo();
     odooTestBtn.disabled = false;
     ctx.toast('Estado de Odoo actualizado', 'success');
+  });
+
+  container.querySelector('#odoo-sync-btn').addEventListener('click', async (e) => {
+    e.target.disabled = true;
+    try {
+      const r = await ctx.api.post('/api/odoo/sync');
+      ctx.toast(
+        r.error
+          ? `Odoo: ${r.error}`
+          : r.updated
+          ? `${r.updated} lead(s) actualizados desde Odoo`
+          : 'Ya estaba todo sincronizado',
+        r.error ? 'error' : 'success'
+      );
+    } catch (err) {
+      ctx.toast(err.message, 'error');
+    } finally {
+      e.target.disabled = false;
+    }
   });
 
   // --- Usuarios y Roles -----------------------------------------------

@@ -1,5 +1,7 @@
 const express = require('express');
 const odoo = require('../odoo');
+const odooSync = require('../odoo-sync');
+const { requireRole } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -34,6 +36,14 @@ router.get('/products', async (req, res) => {
   } catch (err) {
     res.status(502).json({ error: `Odoo: ${err.message}` });
   }
+});
+
+// Forzar una pasada de sincronización Odoo -> CRM ahora mismo (además de la
+// automática cada ~30s). Lo usa el botón "Sincronizar estados" de Ajustes.
+router.post('/sync', requireRole('admin', 'coordinador'), async (req, res) => {
+  if (!odoo.isEnabled()) return res.status(409).json({ error: 'Odoo no configurado' });
+  const result = await odooSync.syncOnce();
+  res.json(result);
 });
 
 module.exports = router;
