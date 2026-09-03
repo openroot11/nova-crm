@@ -171,6 +171,37 @@ async function resolveSalesperson(advisorName) {
   return uid;
 }
 
+// Cada asesor del CRM tiene su propio equipo de ventas (crm.team) en Odoo,
+// con el mismo nombre ("Harol", "Oscar", "Roberto"). Se cachea.
+const _teamCache = new Map();
+
+async function resolveAdvisorTeam(advisorName) {
+  const key = String(advisorName || '').trim().toLowerCase();
+  if (!key) return null;
+  if (_teamCache.has(key)) return _teamCache.get(key);
+  const ids = await callKw('crm.team', 'search', [[['name', '=ilike', advisorName.trim()]]], { limit: 1 });
+  const id = ids.length ? ids[0] : null;
+  _teamCache.set(key, id);
+  return id;
+}
+
+// Cambia el vendedor + el equipo de una oportunidad (al asignar/reasignar un
+// lead a otro asesor en el CRM). Best-effort: si el asesor no existe en Odoo
+// no lanza, solo devuelve updated:false.
+async function setOpportunityOwner(opportunityId, advisorName) {
+  if (!opportunityId) return { updated: false };
+  const [userId, teamId] = await Promise.all([
+    resolveSalesperson(advisorName).catch(() => null),
+    resolveAdvisorTeam(advisorName).catch(() => null),
+  ]);
+  const vals = {};
+  if (userId) vals.user_id = userId;
+  if (teamId) vals.team_id = teamId;
+  if (!Object.keys(vals).length) return { updated: false, reason: `asesor "${advisorName}" no encontrado en Odoo` };
+  await callKw('crm.lead', 'write', [[opportunityId], vals]);
+  return { updated: true, ...vals };
+}
+
 // ---------------------------------------------------------------------------
 //  Leads / oportunidades
 // ---------------------------------------------------------------------------
@@ -359,6 +390,8 @@ module.exports = {
   ping,
   callKw,
   resolveSalesperson,
+  resolveAdvisorTeam,
+  setOpportunityOwner,
   findOrCreatePartner,
   createLead,
   listProducts,

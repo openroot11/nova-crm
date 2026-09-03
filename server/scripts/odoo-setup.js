@@ -149,35 +149,56 @@ async function ensureSaleTax19() {
   return taxId;
 }
 
-async function ensureSalesTeam() {
-  step(`Equipo de ventas "${SALES_TEAM_NAME}"`);
-  const [team] = await odoo.callKw(
-    'crm.team', 'search_read',
-    [[['name', '=', SALES_TEAM_NAME]]],
-    { fields: ['id', 'name', 'member_ids'] }
-  );
-  if (!team) {
-    log(`! No existe el equipo "${SALES_TEAM_NAME}". Créalo en CRM > Configuración > Equipos de ventas.`);
-    return;
-  }
+async function ensureSalesTeams() {
+  step('Equipos de ventas (uno por asesor)');
+
+  // El asesor <-> su usuario de Odoo.
   const users = await odoo.callKw(
     'res.users', 'search_read',
     [['|', ['name', 'in', ADVISOR_LOGINS_OR_NAMES], ['login', 'in', ADVISOR_LOGINS_OR_NAMES.map((s) => s.toLowerCase())]]],
-    { fields: ['id', 'name'] }
+    { fields: ['id', 'name', 'login'] }
   );
-  const want = new Set(users.map((u) => u.id));
-  const have = new Set(team.member_ids || []);
-  const toAdd = [...want].filter((id) => !have.has(id));
-  if (!toAdd.length) {
-    log(`- El equipo ya tiene a los asesores: ${users.map((u) => u.name).join(', ')}`);
-    return;
+  const userByAdvisor = (name) =>
+    users.find((u) => u.name.toLowerCase() === name.toLowerCase() || u.login.toLowerCase() === name.toLowerCase());
+
+  // "Ventas Nova" se conserva como equipo general (no se le quitan miembros).
+  const [general] = await odoo.callKw('crm.team', 'search_read', [[['name', '=', SALES_TEAM_NAME]]], { fields: ['id'] });
+  log(general ? `- Equipo general "${SALES_TEAM_NAME}" conservado` : `! No existe "${SALES_TEAM_NAME}" (no es obligatorio)`);
+
+  for (const advisorName of ADVISOR_LOGINS_OR_NAMES) {
+    const user = userByAdvisor(advisorName);
+    if (!user) {
+      log(`  ! ${advisorName}: no tiene usuario en Odoo -> se omite su equipo`);
+      continue;
+    }
+    // Buscar un equipo que ya sea "de" este asesor: por nombre, o del que ya
+    // sea líder (cubre el equipo "harold" preexistente para "Harol").
+    const existing = await odoo.callKw(
+      'crm.team', 'search_read',
+      [['|', ['name', '=ilike', advisorName], ['user_id', '=', user.id]]],
+      { fields: ['id', 'name', 'user_id', 'member_ids'] }
+    );
+    const team = existing[0];
+    if (!team) {
+      log(`  - ${advisorName}: crear equipo`);
+      if (!DRY_RUN) {
+        await odoo.callKw('crm.team', 'create', [{ name: advisorName, user_id: user.id, member_ids: [[4, user.id]] }]);
+      }
+      log(`    ${wouldOrDid()}: equipo "${advisorName}" (líder y miembro: ${user.name})`);
+      continue;
+    }
+    const patch = {};
+    if (team.name !== advisorName) patch.name = advisorName;
+    if (!team.user_id || team.user_id[0] !== user.id) patch.user_id = user.id;
+    if (!(team.member_ids || []).includes(user.id)) patch.member_ids = [[4, user.id]];
+    if (!Object.keys(patch).length) {
+      log(`  - ${advisorName}: equipo ya OK (id ${team.id})`);
+    } else {
+      log(`  - ${advisorName}: ajustar equipo id ${team.id} (${team.name})`);
+      if (!DRY_RUN) await odoo.callKw('crm.team', 'write', [[team.id], patch]);
+      log(`    ${wouldOrDid()}: ${Object.keys(patch).join(', ')}`);
+    }
   }
-  const addNames = users.filter((u) => toAdd.includes(u.id)).map((u) => u.name).join(', ');
-  log(`- Faltan en el equipo: ${addNames}`);
-  if (!DRY_RUN) {
-    await odoo.callKw('crm.team', 'write', [[team.id], { member_ids: toAdd.map((id) => [4, id]) }]);
-  }
-  log(`  ${wouldOrDid()}: agregados al equipo "${SALES_TEAM_NAME}"`);
 }
 
 async function main() {
@@ -191,13 +212,15 @@ async function main() {
 
   await ensureCurrencyCOP();
   await ensureSaleTax19();
-  await ensureSalesTeam();
+  await ensureSalesTeams();
 
   step('Resumen');
   const [co] = await odoo.callKw('res.company', 'search_read', [[]], { fields: ['name', 'currency_id', 'account_sale_tax_id'] });
+  const teams = await odoo.callKw('crm.team', 'search_read', [[]], { fields: ['name'], order: 'name' });
   log(`Compañía:  ${co.name}`);
   log(`Moneda:    ${co.currency_id ? co.currency_id[1] : '—'}`);
   log(`IVA venta: ${co.account_sale_tax_id ? co.account_sale_tax_id[1] : '—'}`);
+  log(`Equipos:   ${teams.map((t) => t.name).join(', ')}`);
   log('\nListo. Genera una cotización de prueba desde Nova CRM y revisa que el PDF salga en COP con IVA 19%.');
 }
 

@@ -147,11 +147,16 @@ async function syncLeadToOdoo(leadId) {
       city: lead.city || null,
       street: (client && client.address) || null,
     });
-    // Emparejar el asesor del CRM con su usuario de Odoo (por nombre/login).
+    // Emparejar el asesor del CRM con su usuario y su equipo de ventas en Odoo
+    // (cada asesor tiene su propio crm.team con su mismo nombre).
     let salespersonId = null;
+    let teamId = null;
     if (advisor && !advisor.is_group) {
       try {
-        salespersonId = await odoo.resolveSalesperson(advisor.name);
+        [salespersonId, teamId] = await Promise.all([
+          odoo.resolveSalesperson(advisor.name),
+          odoo.resolveAdvisorTeam(advisor.name),
+        ]);
       } catch (e) {
         console.error('[odoo] no se pudo resolver el asesor', advisor.name, e.message);
       }
@@ -164,6 +169,7 @@ async function syncLeadToOdoo(leadId) {
       description: lead.notes || null,
       city: lead.city || null,
       user_id: salespersonId || undefined,
+      team_id: teamId || undefined,
     });
     await db
       .prepare('UPDATE leads SET odoo_partner_id = ?, odoo_lead_id = ? WHERE id = ?')
@@ -187,6 +193,17 @@ async function pushOdooStage(lead, stageName) {
     await odoo.moveOpportunityStage(lead.odoo_lead_id, stageName);
   } catch (err) {
     console.error(`[odoo] lead ${lead.id}: no se movio la etapa a "${stageName}":`, err.message);
+  }
+}
+
+// Al asignar/reasignar un lead a otro asesor en el CRM, mover la oportunidad
+// en Odoo al vendedor + equipo de ese asesor. Best-effort.
+async function pushOdooOwner(lead, advisorName) {
+  if (!odoo.isEnabled() || !lead || !lead.odoo_lead_id || !advisorName) return;
+  try {
+    await odoo.setOpportunityOwner(lead.odoo_lead_id, advisorName);
+  } catch (err) {
+    console.error(`[odoo] lead ${lead.id}: no se pudo reasignar la oportunidad a "${advisorName}":`, err.message);
   }
 }
 
@@ -654,6 +671,13 @@ router.post('/:id/assign', requireRole('coordinador', 'admin'), async (req, res)
 
   await db.prepare("UPDATE leads SET assigned_advisor_id = ?, status = 'asignado' WHERE id = ?").run(advisor.id, id);
 
+  const updated = await db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
+  // Si el lead ya está en Odoo, mover la oportunidad al vendedor + equipo del
+  // nuevo asesor; si aún no está (fallo previo, integración recién activada),
+  // crearla ahora ya con el asesor correcto.
+  if (updated.odoo_lead_id) await pushOdooOwner(updated, advisor.name);
+  else await syncLeadToOdoo(id);
+
   broadcast('leads_changed', { reason: 'assigned', id });
   res.json(await serialize(await db.prepare('SELECT * FROM leads WHERE id = ?').get(id)));
 });
@@ -922,9 +946,13 @@ router.post('/:id/reassign', async (req, res) => {
   });
   await tx();
 
+  const updated = await db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
+  if (updated.odoo_lead_id) await pushOdooOwner(updated, toAdvisor.name);
+  else await syncLeadToOdoo(id);
+
   broadcast('leads_changed', { reason: 'reassigned', id });
   broadcast('advisors_changed', { reason: 'penalty', id: fromAdvisorId });
-  res.json(await serialize(await db.prepare('SELECT * FROM leads WHERE id = ?').get(id)));
+  res.json(await serialize(updated));
 });
 
 router.post('/:id/close', async (req, res) => {
