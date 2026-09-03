@@ -9,12 +9,12 @@ const user = getCurrentUser();
 // dia (Ventas/SLA); coordinador suma reportes y equipo; admin ve todo,
 // incluyendo Ajustes (que ademas el backend ya protege con requireRole).
 const ROUTES_BY_ROLE = {
-  admin: ['dashboard', 'ventas', 'sla', 'seguimiento', 'clientes', 'informe', 'ventas-cerradas', 'estadisticas', 'asesores', 'ajustes'],
-  coordinador: ['dashboard', 'ventas', 'sla', 'seguimiento', 'clientes', 'informe', 'ventas-cerradas', 'estadisticas', 'asesores'],
+  admin: ['dashboard', 'ventas', 'sla', 'seguimiento', 'cotizaciones', 'clientes', 'informe', 'ventas-cerradas', 'estadisticas', 'asesores', 'ajustes'],
+  coordinador: ['dashboard', 'ventas', 'sla', 'seguimiento', 'cotizaciones', 'clientes', 'informe', 'ventas-cerradas', 'estadisticas', 'asesores'],
   // Seguimiento (cotizaciones sin respuesta del cliente) es seguimiento de
   // EQUIPO, no del dia a dia de un asesor sobre lo suyo -- se le quito del
   // menu para no duplicar la misma alerta que ya ve en Ventas/SLA.
-  asesor: ['ventas', 'sla', 'clientes'],
+  asesor: ['ventas', 'sla', 'cotizaciones', 'clientes'],
 };
 const allowedRoutes = ROUTES_BY_ROLE[user?.role] || ROUTES_BY_ROLE.asesor;
 // El Dashboard resume datos de todo el equipo (los mismos endpoints de
@@ -71,6 +71,7 @@ const routes = {
   ventas: () => import('./views/ventas.js'),
   sla: () => import('./views/sla.js'),
   seguimiento: () => import('./views/seguimiento.js'),
+  cotizaciones: () => import('./views/cotizaciones.js'),
   clientes: () => import('./views/clientes.js'),
   informe: () => import('./views/informe.js'),
   'ventas-cerradas': () => import('./views/ventasCerradas.js'),
@@ -84,6 +85,7 @@ const titles = {
   ventas: 'Registro Operativo',
   sla: 'Control SLA 24h',
   seguimiento: 'Seguimiento Activo',
+  cotizaciones: 'Cotizaciones y Ventas',
   clientes: 'Clientes',
   informe: 'Informe Diario',
   'ventas-cerradas': 'Ventas Cerradas',

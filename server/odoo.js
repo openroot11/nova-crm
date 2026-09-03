@@ -206,10 +206,11 @@ async function listProducts(query) {
 // ---------------------------------------------------------------------------
 //  Cotizacion (sale.order)
 // ---------------------------------------------------------------------------
-async function createQuotation({ partner_id, opportunity_id, lines, validity_days, note }) {
-  if (!partner_id) throw new Error('Falta el contacto (partner_id) para la cotizacion');
-  if (!Array.isArray(lines) || lines.length === 0) throw new Error('La cotizacion necesita al menos una linea');
 
+// Convierte las lineas que manda el frontend ({ product_id | product_name,
+// qty, price_unit?, name? }) a comandos ORM [0, 0, {...}] para order_line.
+// Se usa al crear la cotizacion y al reescribir sus lineas (editar borrador).
+async function buildOrderLineCommands(lines) {
   const orderLine = [];
   for (const ln of lines) {
     let productId = ln.product_id;
@@ -225,6 +226,14 @@ async function createQuotation({ partner_id, opportunity_id, lines, validity_day
     if (ln.name) cmd.name = ln.name;
     orderLine.push([0, 0, cmd]);
   }
+  return orderLine;
+}
+
+async function createQuotation({ partner_id, opportunity_id, lines, validity_days, note }) {
+  if (!partner_id) throw new Error('Falta el contacto (partner_id) para la cotizacion');
+  if (!Array.isArray(lines) || lines.length === 0) throw new Error('La cotizacion necesita al menos una linea');
+
+  const orderLine = await buildOrderLineCommands(lines);
 
   const vals = { partner_id, order_line: orderLine };
   if (opportunity_id) vals.opportunity_id = opportunity_id;
@@ -239,15 +248,84 @@ async function createQuotation({ partner_id, opportunity_id, lines, validity_day
   return readQuotation(id);
 }
 
+// Estados de sale.order -> etiqueta legible para el CRM.
+const ORDER_STATE_LABELS = {
+  draft: 'Borrador',
+  sent: 'Enviada',
+  sale: 'Pedido de venta',
+  done: 'Bloqueada',
+  cancel: 'Cancelada',
+};
+
 async function readQuotation(id) {
   const [order] = await callKw('sale.order', 'read', [
     [id],
-    ['name', 'state', 'amount_untaxed', 'amount_tax', 'amount_total', 'validity_date', 'currency_id', 'partner_id'],
+    [
+      'name', 'state', 'amount_untaxed', 'amount_tax', 'amount_total', 'validity_date',
+      'currency_id', 'partner_id', 'invoice_status', 'date_order',
+    ],
   ]);
+  if (!order) throw new Error(`La cotizacion ${id} ya no existe en Odoo`);
   const lines = await callKw('sale.order.line', 'search_read', [[['order_id', '=', id], ['display_type', '=', false]]], {
     fields: ['name', 'product_id', 'product_uom_qty', 'price_unit', 'price_subtotal', 'price_tax', 'price_total'],
   });
-  return { id, ...order, lines };
+  return {
+    id,
+    ...order,
+    state_label: ORDER_STATE_LABELS[order.state] || order.state,
+    is_confirmed: order.state === 'sale' || order.state === 'done',
+    lines,
+  };
+}
+
+// Alias semantico: una vez confirmada, la misma sale.order deja de ser
+// "cotizacion" y pasa a ser "pedido de venta" -- el CRM la lee igual.
+const readOrder = readQuotation;
+
+// Confirma la cotizacion -> pasa a Pedido de venta (state 'sale'). Idempotente:
+// si ya estaba confirmada, no es un error, solo devuelve el estado actual.
+async function confirmOrder(id) {
+  const current = await readQuotation(id);
+  if (current.is_confirmed) return current;
+  await callKw('sale.order', 'action_confirm', [[id]]);
+  return readQuotation(id);
+}
+
+// Reescribe TODAS las lineas de una cotizacion en borrador (editar cotizacion
+// desde el CRM). Falla si ya esta confirmada -- ahi ya no se tocan las lineas.
+async function updateQuotationLines(id, lines) {
+  if (!Array.isArray(lines) || lines.length === 0) throw new Error('La cotizacion necesita al menos una linea');
+  const current = await readQuotation(id);
+  if (current.is_confirmed) throw new Error('La cotizacion ya está confirmada como pedido de venta; no se pueden cambiar sus líneas');
+  const orderLine = [[5, 0, 0], ...(await buildOrderLineCommands(lines))];
+  await callKw('sale.order', 'write', [[id], { order_line: orderLine }]);
+  return readQuotation(id);
+}
+
+// ---------------------------------------------------------------------------
+//  Etapas del pipeline (crm.stage) -- mantener Odoo al dia con el embudo Nova
+// ---------------------------------------------------------------------------
+const _stageCache = new Map(); // nombre(lower) -> id
+
+async function _stageIdByName(name) {
+  const key = String(name || '').trim().toLowerCase();
+  if (!key) return null;
+  if (_stageCache.has(key)) return _stageCache.get(key);
+  const ids = await callKw('crm.stage', 'search', [[['name', '=ilike', name.trim()]]], { limit: 1 });
+  const id = ids.length ? ids[0] : null;
+  _stageCache.set(key, id);
+  return id;
+}
+
+// Mueve la oportunidad a una etapa por nombre ('Asignado' | 'Contactado' |
+// 'Cotizado' | 'Ganado'). Best-effort: si la etapa no existe o el id es
+// invalido, no lanza -- el CRM sigue siendo la fuente de verdad del embudo.
+async function moveOpportunityStage(opportunityId, stageName) {
+  if (!opportunityId) return { moved: false };
+  const stageId = await _stageIdByName(stageName);
+  if (!stageId) return { moved: false, reason: `etapa "${stageName}" no encontrada` };
+  await callKw('crm.lead', 'write', [[opportunityId], { stage_id: stageId }]);
+  return { moved: true, stage_id: stageId };
 }
 
 async function markQuotationSent(id) {
@@ -286,6 +364,11 @@ module.exports = {
   listProducts,
   createQuotation,
   readQuotation,
+  readOrder,
+  confirmOrder,
+  updateQuotationLines,
+  moveOpportunityStage,
   markQuotationSent,
   quotationPdf,
+  ORDER_STATE_LABELS,
 };

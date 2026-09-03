@@ -178,6 +178,18 @@ async function syncLeadToOdoo(leadId) {
   }
 }
 
+// Mantener el pipeline de Odoo al dia con el embudo Nova. Best-effort: el CRM
+// es la fuente de verdad del embudo, asi que un fallo aqui se registra y se
+// ignora (no rompe la accion del asesor).
+async function pushOdooStage(lead, stageName) {
+  if (!odoo.isEnabled() || !lead || !lead.odoo_lead_id) return;
+  try {
+    await odoo.moveOpportunityStage(lead.odoo_lead_id, stageName);
+  } catch (err) {
+    console.error(`[odoo] lead ${lead.id}: no se movio la etapa a "${stageName}":`, err.message);
+  }
+}
+
 async function serialize(lead, advisorRate = 0, advisorsById = null) {
   // advisorsById permite pasar un Map pre-cargado (ver GET '/' abajo) para
   // evitar una consulta a advisors POR CADA lead: con Postgres remoto, N
@@ -461,6 +473,58 @@ router.get('/xlsx-cerradas', async (req, res) => {
   res.send(buffer);
 });
 
+// Listado de cotizaciones/pedidos: todos los leads que tienen una sale.order
+// en Odoo, enriquecidos con el estado en vivo (una sola llamada batch a Odoo).
+// Alimenta la vista "Cotizaciones" del CRM. Un asesor solo ve las suyas.
+router.get('/quotations', async (req, res) => {
+  const conditions = ['odoo_order_id IS NOT NULL'];
+  const params = [];
+  if (req.user.role === 'asesor') {
+    conditions.push('assigned_advisor_id = ?');
+    params.push(req.user.advisor_id);
+  }
+  const rows = await db
+    .prepare(`SELECT * FROM leads WHERE ${conditions.join(' AND ')} ORDER BY COALESCE(quoted_at, created_at) DESC`)
+    .all(...params);
+  const advisorsById = new Map((await db.prepare('SELECT id, name FROM advisors').all()).map((a) => [a.id, a]));
+
+  let ordersById = new Map();
+  let odooError = null;
+  if (odoo.isEnabled() && rows.length) {
+    try {
+      const orderIds = [...new Set(rows.map((r) => r.odoo_order_id))];
+      const orders = await odoo.callKw('sale.order', 'read', [
+        orderIds,
+        ['name', 'state', 'amount_total', 'amount_untaxed', 'amount_tax', 'invoice_status', 'validity_date'],
+      ]);
+      ordersById = new Map(orders.map((o) => [o.id, o]));
+    } catch (err) {
+      odooError = err.message;
+    }
+  }
+
+  const quotations = rows.map((lead) => {
+    const order = ordersById.get(lead.odoo_order_id) || null;
+    return {
+      lead_id: lead.id,
+      client_name: lead.client_name,
+      advisor_name: lead.assigned_advisor_id ? advisorsById.get(lead.assigned_advisor_id)?.name || null : null,
+      product: lead.product || null,
+      status: lead.status,
+      sale_reference: lead.sale_reference,
+      quoted_at: lead.quoted_at,
+      odoo_order_id: lead.odoo_order_id,
+      order_state: order ? order.state : null,
+      order_state_label: order ? odoo.ORDER_STATE_LABELS[order.state] || order.state : null,
+      amount_total: order ? order.amount_total : lead.amount || 0,
+      amount_untaxed: order ? order.amount_untaxed : null,
+      amount_tax: order ? order.amount_tax : null,
+      validity_date: order ? order.validity_date : null,
+    };
+  });
+  res.json({ quotations, odoo_error: odooError });
+});
+
 router.get('/:id', async (req, res) => {
   const lead = await db.prepare('SELECT * FROM leads WHERE id = ?').get(Number(req.params.id));
   if (!lead) return res.status(404).json({ error: 'Lead no encontrado' });
@@ -613,6 +677,7 @@ router.patch('/:id/contact', async (req, res) => {
   await db.prepare("UPDATE leads SET status = 'contactado', contacted_at = ? WHERE id = ?").run(now, id);
 
   const updated = await db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
+  await pushOdooStage(updated, 'Contactado');
   broadcast('leads_changed', { reason: 'contacted', id });
   res.json(await serialize(updated));
 });
@@ -661,6 +726,7 @@ router.patch('/:id/quote', async (req, res) => {
     .run(now, now, id);
 
   const updated = await db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
+  await pushOdooStage(updated, 'Cotizado');
   broadcast('leads_changed', { reason: 'quoted', id });
   res.json(await serialize(updated));
 });
@@ -722,6 +788,67 @@ router.post('/:id/quotation', async (req, res) => {
     )
     .run(order.id, order.name, order.amount_total, now, now, id);
 
+  const updated = await db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
+  await pushOdooStage(updated, 'Cotizado');
+  broadcast('leads_changed', { reason: 'quoted', id });
+  res.json({ lead: await serialize(updated), quotation: order });
+});
+
+// Estado actual de la cotización/pedido en Odoo (líneas, subtotales, estado).
+// Lo usa el CRM para mostrar "Ver cotización" y precargar el monto al cerrar.
+router.get('/:id/quotation', async (req, res) => {
+  const id = Number(req.params.id);
+  const lead = await db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
+  if (!lead) return res.status(404).json({ error: 'Lead no encontrado' });
+  if (!canOperateOn(req.user, lead)) return res.status(403).json({ error: 'No tienes permiso sobre este lead' });
+  if (!odoo.isEnabled()) return res.status(409).json({ error: 'La integración con Odoo no está configurada' });
+  if (!lead.odoo_order_id) return res.status(409).json({ error: 'Este lead no tiene cotización en Odoo' });
+  try {
+    const order = await odoo.readOrder(lead.odoo_order_id);
+    res.json({ quotation: order });
+  } catch (err) {
+    res.status(502).json({ error: `Odoo: ${err.message}` });
+  }
+});
+
+// Marcar la cotización como enviada al cliente (state 'sent').
+router.post('/:id/quotation/send', async (req, res) => {
+  const id = Number(req.params.id);
+  const lead = await db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
+  if (!lead) return res.status(404).json({ error: 'Lead no encontrado' });
+  if (!canOperateOn(req.user, lead)) return res.status(403).json({ error: 'No tienes permiso sobre este lead' });
+  if (!odoo.isEnabled()) return res.status(409).json({ error: 'La integración con Odoo no está configurada' });
+  if (!lead.odoo_order_id) return res.status(409).json({ error: 'Este lead no tiene cotización en Odoo' });
+  try {
+    const order = await odoo.markQuotationSent(lead.odoo_order_id);
+    res.json({ quotation: order });
+  } catch (err) {
+    res.status(502).json({ error: `Odoo: ${err.message}` });
+  }
+});
+
+// Reescribir las líneas de una cotización en borrador (editar desde el CRM).
+// body: { lines: [{ product_id?, product_name?, qty, price_unit? }] }
+router.put('/:id/quotation', async (req, res) => {
+  const id = Number(req.params.id);
+  const lead = await db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
+  if (!lead) return res.status(404).json({ error: 'Lead no encontrado' });
+  if (!canOperateOn(req.user, lead)) return res.status(403).json({ error: 'No tienes permiso sobre este lead' });
+  if (!odoo.isEnabled()) return res.status(409).json({ error: 'La integración con Odoo no está configurada' });
+  if (!lead.odoo_order_id) return res.status(409).json({ error: 'Este lead no tiene cotización en Odoo' });
+  const { lines } = req.body || {};
+  if (!Array.isArray(lines) || lines.length === 0) {
+    return res.status(400).json({ error: 'Agrega al menos un producto a la cotización' });
+  }
+  let order;
+  try {
+    order = await odoo.updateQuotationLines(lead.odoo_order_id, lines);
+  } catch (err) {
+    return res.status(502).json({ error: `Odoo: ${err.message}` });
+  }
+  await db
+    .prepare('UPDATE leads SET sale_reference = ?, amount = ? WHERE id = ?')
+    .run(order.name, order.amount_total, id);
   const updated = await db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
   broadcast('leads_changed', { reason: 'quoted', id });
   res.json({ lead: await serialize(updated), quotation: order });
@@ -832,7 +959,34 @@ router.post('/:id/close', async (req, res) => {
       id
     );
 
-  const closedLead = await db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
+  let closedLead = await db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
+
+  // Sincronizar con Odoo: una venta ganada CONFIRMA la cotización -> pasa a
+  // Pedido de venta (state 'sale'); una perdida marca la oportunidad como
+  // perdida. Best-effort -- el cierre en el CRM ya quedó guardado; si Odoo
+  // falla, se avisa con odoo_warning y no se revierte nada.
+  let odooWarning = null;
+  if (odoo.isEnabled()) {
+    try {
+      if (result === 'ganado') {
+        if (closedLead.odoo_order_id) {
+          const order = await odoo.confirmOrder(closedLead.odoo_order_id);
+          // El total del pedido confirmado en Odoo manda sobre el monto tecleado.
+          await db
+            .prepare('UPDATE leads SET amount = ?, sale_reference = ? WHERE id = ?')
+            .run(order.amount_total, order.name, id);
+          closedLead = await db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
+        }
+        await pushOdooStage(closedLead, 'Ganado');
+      } else if (closedLead.odoo_lead_id) {
+        await odoo.callKw('crm.lead', 'action_set_lost', [[closedLead.odoo_lead_id]]).catch(() => {});
+      }
+    } catch (err) {
+      console.error(`[odoo] lead ${id}: no se pudo confirmar el pedido al cerrar:`, err.message);
+      odooWarning = `La venta se cerró en el CRM, pero no se pudo confirmar el pedido en Odoo: ${err.message}`;
+    }
+  }
+
   broadcast('leads_changed', { reason: 'closed', id });
   if (result === 'ganado') {
     broadcast('sale_closed', {
@@ -842,7 +996,9 @@ router.post('/:id/close', async (req, res) => {
       advisor_id: closedLead.assigned_advisor_id,
     });
   }
-  res.json(await serialize(closedLead));
+  const payload = await serialize(closedLead);
+  if (odooWarning) payload.odoo_warning = odooWarning;
+  res.json(payload);
 });
 
 // --- Abonos (pagos parciales) -------------------------------------------

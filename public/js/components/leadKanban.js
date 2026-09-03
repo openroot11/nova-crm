@@ -1,5 +1,5 @@
 import { escapeHtml, formatMoney, statusBadge, copyNameBtn, bindCopyButtons, canReassignLead } from '../utils.js';
-import { openReassignModal, openCloseModal, openEditLeadModal, markContacted, openQuotationModal } from './leadActions.js';
+import { openReassignModal, openCloseModal, openEditLeadModal, markContacted, openQuotationModal, openQuotationViewModal } from './leadActions.js';
 
 // Tablero por estado del embudo -- vista alterna a la tabla de Ventas, mismos
 // datos (GET /api/leads ya filtrado) y mismas acciones que ya existen en
@@ -36,6 +36,15 @@ function cardHtml(lead, ctx) {
     if (lead.status === 'asignado' || lead.status === 'contactado') {
       primary.push(`<button data-action="quote" data-id="${lead.id}" class="px-2 py-1 bg-primary-fixed text-on-primary-fixed-variant rounded text-[11px] font-label-bold hover:opacity-90 transition-colors whitespace-nowrap">Cotizar</button>`);
     }
+    // Lead ya cotizado: si tiene sale.order en Odoo, "Ver cotización" (ver/
+    // editar/enviar/confirmar); si se marcó cotizado sin Odoo, ofrecer armarla.
+    if (lead.status === 'cotizado') {
+      primary.push(
+        lead.odoo_order_id
+          ? `<button data-action="view-quote" data-id="${lead.id}" class="px-2 py-1 bg-primary-fixed text-on-primary-fixed-variant rounded text-[11px] font-label-bold hover:opacity-90 transition-colors whitespace-nowrap">Ver cotización</button>`
+          : `<button data-action="quote" data-id="${lead.id}" class="px-2 py-1 border border-outline-variant text-on-surface-variant rounded text-[11px] font-label-bold hover:bg-surface-container-low transition-colors whitespace-nowrap">Cotizar en Odoo</button>`
+      );
+    }
     primary.push(`<button data-action="close" data-id="${lead.id}" class="px-2 py-1 bg-secondary text-on-secondary rounded text-[11px] font-label-bold hover:opacity-90 transition-colors whitespace-nowrap">Cerrar</button>`);
     // Un asesor tambien puede reasignar, pero solo un lead propio que ya
     // esta vencido (SLA >24h) -- ver canReassignLead. El backend es quien
@@ -48,6 +57,9 @@ function cardHtml(lead, ctx) {
     // cierre) sigue siendo solo de coordinador/admin (rama `else` de abajo).
     secondary.push(`<button data-action="edit" data-id="${lead.id}" class="px-2 py-1 border border-outline-variant text-on-surface-variant rounded text-[11px] font-label-bold hover:bg-surface-container-low transition-colors inline-flex items-center gap-1 whitespace-nowrap"><span class="material-symbols-outlined text-[13px]">edit</span>Editar</button>`);
   } else if (isPrivileged) {
+    if (lead.odoo_order_id) {
+      secondary.push(`<button data-action="view-quote" data-id="${lead.id}" class="px-2 py-1 border border-outline-variant text-on-surface-variant rounded text-[11px] font-label-bold hover:bg-surface-container-low transition-colors inline-flex items-center gap-1 whitespace-nowrap"><span class="material-symbols-outlined text-[13px]">request_quote</span>Ver cotización</button>`);
+    }
     secondary.push(`<button data-action="edit" data-id="${lead.id}" class="px-2 py-1 border border-outline-variant text-on-surface-variant rounded text-[11px] font-label-bold hover:bg-surface-container-low transition-colors inline-flex items-center gap-1 whitespace-nowrap"><span class="material-symbols-outlined text-[13px]">edit</span>Editar</button>`);
   }
   return `
@@ -60,6 +72,7 @@ function cardHtml(lead, ctx) {
       <p class="text-[11px] text-on-surface-variant truncate flex items-center gap-1">
         <span class="material-symbols-outlined text-[13px]">person</span>${escapeHtml(lead.advisor_name || 'Sin asignar')}
       </p>
+      ${lead.odoo_order_id && lead.sale_reference ? `<p class="text-[11px] text-on-surface-variant truncate flex items-center gap-1"><span class="material-symbols-outlined text-[13px]">request_quote</span>${escapeHtml(lead.sale_reference)}</p>` : ''}
       ${closed && lead.amount ? `<p class="text-body-sm font-bold text-on-surface">${formatMoney(lead.amount)}</p>` : ''}
       ${primary.length ? `<div class="flex flex-wrap gap-1 pt-1">${primary.join('')}</div>` : ''}
       ${secondary.length ? `<div class="flex flex-wrap gap-1">${secondary.join('')}</div>` : ''}
@@ -124,6 +137,7 @@ export function renderLeadKanban(root, leads, ctx, onDone) {
       if (btn.dataset.action === 'close') openCloseModal(lead, ctx, onDone);
       if (btn.dataset.action === 'contact') markContacted(lead, ctx, onDone);
       if (btn.dataset.action === 'quote') openQuotationModal(lead, ctx, onDone);
+      if (btn.dataset.action === 'view-quote') openQuotationViewModal(lead, ctx, onDone);
       if (btn.dataset.action === 'edit') openEditLeadModal(lead, ctx, onDone);
     });
   });

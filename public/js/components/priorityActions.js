@@ -1,5 +1,5 @@
 import { escapeHtml, followupBadge, copyNameBtn, bindCopyButtons } from '../utils.js';
-import { markContacted, markQuoted, markStillInContact, registerFollowup, openCloseModal } from './leadActions.js';
+import { markContacted, openQuotationModal, markStillInContact, registerFollowup, openCloseModal } from './leadActions.js';
 
 // Panel de "lo que necesita atencion ya", combinando los dos listados que ya
 // expone el backend (GET /api/leads?critical_only=1 y ?followup_only=1) --
@@ -126,7 +126,7 @@ export async function renderPriorityActions(root, ctx, onDone) {
       if (!lead) return;
       if (btn.dataset.action === 'contact') markContacted(lead, ctx, onDone);
       if (btn.dataset.action === 'still-contact') markStillInContact(lead, ctx, onDone);
-      if (btn.dataset.action === 'quote') markQuoted(lead, ctx, onDone);
+      if (btn.dataset.action === 'quote') openQuotationModal(lead, ctx, onDone);
       if (btn.dataset.action === 'followup') registerFollowup(lead, ctx, onDone);
       if (btn.dataset.action === 'close') openCloseModal(lead, ctx, onDone);
     });

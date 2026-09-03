@@ -197,20 +197,159 @@ export function markQuoted(lead, ctx, onDone) {
   });
 }
 
-// Armar la cotización. Si Odoo está configurado (ver server/.env), abre el
-// editor de líneas de producto -> crea el sale.order en Odoo (IVA y total
-// calculados) -> deja ver / descargar el PDF. Si Odoo NO está configurado,
-// cae al modal simple de "marcar cotizado con fecha" de siempre (markQuoted).
+// ===========================================================================
+//  Cotización → Venta (motor: Odoo)
+// ===========================================================================
+// Flujo completo, sin salir de Nova CRM:
+//   1. openQuotationModal   -> arma el sale.order en Odoo (líneas, IVA, total, PDF)
+//   2. openQuotationViewModal -> ver / editar / enviar una cotización ya creada
+//   3. "Confirmar venta"    -> abre openCloseModal; al cerrar "ganado" el
+//      backend confirma el pedido en Odoo (state 'sale').
+// Si Odoo no está configurado o no responde, openQuotationModal cae al modal
+// simple de "marcar cotizado con fecha" de siempre (markQuoted).
+
 const money = (n) =>
   new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(Number(n) || 0);
 
-export async function openQuotationModal(lead, ctx, onDone) {
-  let status;
+async function fetchOdooStatus(ctx) {
   try {
-    status = await ctx.api.get('/api/odoo/status');
+    return await ctx.api.get('/api/odoo/status');
   } catch {
-    status = { enabled: false };
+    return { enabled: false };
   }
+}
+
+async function fetchOdooProducts(ctx) {
+  const products = await ctx.api.get('/api/odoo/products');
+  if (!products.length) throw new Error('Odoo no tiene productos vendibles cargados');
+  return products;
+}
+
+// Editor reutilizable de líneas de producto (crear cotización / editar borrador).
+// Pinta dentro de `host` y devuelve helpers. `initialLines`: [{ product_id, qty, price_unit }].
+function mountQuotationLineEditor(host, products, initialLines, opts = {}) {
+  const optionsHtml = products
+    .map((p) => `<option value="${p.id}" data-price="${p.price}">${escapeHtml(p.name)}</option>`)
+    .join('');
+  host.innerHTML = `
+    <div data-lines class="space-y-2 mb-2"></div>
+    <button type="button" data-add class="btn btn-secondary text-[12px] mb-4">
+      <span class="material-symbols-outlined">add</span> Agregar producto
+    </button>
+    <div class="flex items-end gap-4 mb-4">
+      <div class="${opts.hideValidity ? 'hidden' : ''}">
+        <label class="block text-label-bold font-label-bold uppercase tracking-wide text-on-surface-variant mb-1">Validez (días)</label>
+        <input data-validity type="number" min="1" value="8" class="w-24 p-2.5 border border-outline-variant rounded-md outline-none focus:border-outline focus:ring-2 focus:ring-outline/20" />
+      </div>
+      <div class="flex-1 text-right">
+        <p class="text-body-sm text-on-surface-variant">Subtotal estimado (sin IVA)</p>
+        <p data-subtotal class="text-headline-sm font-headline-sm font-bold text-on-surface">$ 0</p>
+      </div>
+    </div>
+  `;
+  const linesEl = host.querySelector('[data-lines]');
+  const subtotalEl = host.querySelector('[data-subtotal]');
+
+  function readRaw() {
+    return [...linesEl.querySelectorAll('[data-line]')].map((row) => {
+      const opt = row.querySelector('[data-prod]').selectedOptions[0];
+      const priceRaw = row.querySelector('[data-price]').value;
+      return {
+        product_id: Number(row.querySelector('[data-prod]').value),
+        qty: Number(row.querySelector('[data-qty]').value) || 0,
+        price_unit: priceRaw === '' ? undefined : Number(priceRaw),
+        _listPrice: Number(opt?.dataset.price || 0),
+      };
+    });
+  }
+  function recalc() {
+    const sub = readRaw().reduce((s, l) => s + l.qty * (l.price_unit ?? l._listPrice), 0);
+    subtotalEl.textContent = money(sub);
+  }
+  function lineRow(preset) {
+    const row = document.createElement('div');
+    row.dataset.line = '';
+    row.className = 'grid grid-cols-[1fr_5rem_8rem_auto] gap-2 items-center';
+    row.innerHTML = `
+      <select data-prod class="p-2 border border-outline-variant rounded-md outline-none focus:border-outline text-body-sm">${optionsHtml}</select>
+      <input data-qty class="p-2 border border-outline-variant rounded-md outline-none focus:border-outline text-body-sm" type="number" min="0" step="1" value="1" />
+      <input data-price class="p-2 border border-outline-variant rounded-md outline-none focus:border-outline text-body-sm" type="number" min="0" step="1000" placeholder="precio lista" />
+      <button type="button" data-del class="btn btn-icon" aria-label="Quitar"><span class="material-symbols-outlined">delete</span></button>
+    `;
+    const prod = row.querySelector('[data-prod]');
+    const qty = row.querySelector('[data-qty]');
+    const price = row.querySelector('[data-price]');
+    const syncPlaceholder = () => {
+      const opt = prod.selectedOptions[0];
+      price.placeholder = opt ? Number(opt.dataset.price || 0).toLocaleString('es-CO') : 'precio lista';
+    };
+    if (preset) {
+      if (preset.product_id && prod.querySelector(`option[value="${preset.product_id}"]`)) prod.value = String(preset.product_id);
+      if (preset.qty != null) qty.value = preset.qty;
+      if (preset.price_unit != null) price.value = Math.round(preset.price_unit);
+    }
+    prod.addEventListener('change', () => { syncPlaceholder(); recalc(); });
+    qty.addEventListener('input', recalc);
+    price.addEventListener('input', recalc);
+    row.querySelector('[data-del]').addEventListener('click', () => { row.remove(); recalc(); });
+    syncPlaceholder();
+    linesEl.appendChild(row);
+    recalc();
+  }
+
+  host.querySelector('[data-add]').addEventListener('click', () => lineRow());
+  if (Array.isArray(initialLines) && initialLines.length) initialLines.forEach((l) => lineRow(l));
+  else lineRow();
+
+  return {
+    readLines: () => readRaw().filter((l) => l.product_id && l.qty > 0).map(({ _listPrice, ...l }) => l),
+    validityDays: () => Number(host.querySelector('[data-validity]')?.value) || 8,
+  };
+}
+
+// Panel de resultado tras crear/enviar/actualizar una cotización.
+function renderQuotationResult(body, lead, quotation, ctx, { close, onDone }) {
+  body.innerHTML = `
+    <div class="mb-4 p-4 rounded-lg bg-secondary-container text-on-secondary-container">
+      <div class="flex items-center justify-between gap-2 mb-1">
+        <p class="font-bold text-body-md">${escapeHtml(quotation.name)}</p>
+        <span class="px-2 py-0.5 rounded text-[11px] font-bold bg-surface text-on-surface">${escapeHtml(quotation.state_label || '')}</span>
+      </div>
+      <p class="text-body-sm">Subtotal: ${money(quotation.amount_untaxed)} · IVA: ${money(quotation.amount_tax)}</p>
+      <p class="text-headline-sm font-headline-sm font-bold mt-1">Total: ${money(quotation.amount_total)}</p>
+    </div>
+    <div class="flex flex-wrap gap-2">
+      <a href="/api/leads/${lead.id}/quotation/pdf" target="_blank" rel="noopener" class="btn btn-secondary inline-flex">
+        <span class="material-symbols-outlined">picture_as_pdf</span> Ver / descargar PDF
+      </a>
+      ${quotation.state === 'draft' ? `<button type="button" data-send class="btn btn-secondary">Marcar como enviada</button>` : ''}
+      ${!quotation.is_confirmed ? `<button type="button" data-confirm class="btn btn-primary">Confirmar venta</button>` : ''}
+    </div>
+    <div class="flex justify-end mt-4">
+      <button type="button" data-done class="btn btn-secondary">Cerrar</button>
+    </div>
+  `;
+  body.querySelector('[data-done]').addEventListener('click', () => { close(); onDone?.(); });
+  body.querySelector('[data-send]')?.addEventListener('click', async (e) => {
+    e.target.disabled = true;
+    try {
+      const { quotation: updated } = await ctx.api.post(`/api/leads/${lead.id}/quotation/send`);
+      ctx.toast('Cotización marcada como enviada', 'success');
+      renderQuotationResult(body, lead, updated, ctx, { close, onDone });
+      onDone?.();
+    } catch (err) {
+      ctx.toast(err.message, 'error');
+      e.target.disabled = false;
+    }
+  });
+  body.querySelector('[data-confirm]')?.addEventListener('click', () => {
+    close();
+    openCloseModal({ ...lead, odoo_order_id: quotation.id, sale_reference: quotation.name, amount: quotation.amount_total }, ctx, onDone);
+  });
+}
+
+export async function openQuotationModal(lead, ctx, onDone) {
+  const status = await fetchOdooStatus(ctx);
   if (!status || !status.enabled || status.ok === false) {
     if (status && status.enabled && status.ok === false) {
       ctx.toast(`Odoo no responde (${status.error || 'error'}). Se cotiza solo en el CRM.`, 'error');
@@ -218,133 +357,166 @@ export async function openQuotationModal(lead, ctx, onDone) {
     return markQuoted(lead, ctx, onDone);
   }
 
-  let products = [];
-  try {
-    products = await ctx.api.get('/api/odoo/products');
-  } catch (err) {
-    ctx.toast(`No se pudo cargar el catálogo de Odoo: ${err.message}`, 'error');
-    return;
-  }
-  if (!products.length) {
-    ctx.toast('Odoo no tiene productos vendibles cargados', 'error');
-    return;
-  }
+  // Si el lead ya tiene una cotización en Odoo, no crear otra: abrir la vista.
+  if (lead.odoo_order_id) return openQuotationViewModal(lead, ctx, onDone);
 
-  const optionsHtml = products
-    .map((p) => `<option value="${p.id}" data-price="${p.price}">${escapeHtml(p.name)}</option>`)
-    .join('');
+  let products;
+  try {
+    products = await fetchOdooProducts(ctx);
+  } catch (err) {
+    ctx.toast(err.message, 'error');
+    return;
+  }
 
   openModal({
     title: `Cotización en Odoo · ${escapeHtml(lead.client_name)}`,
     wide: true,
     render: (body, { close }) => {
       body.innerHTML = `
-        <div id="q-lines" class="space-y-2 mb-2"></div>
-        <button id="q-add" type="button" class="btn btn-secondary text-[12px] mb-4">
-          <span class="material-symbols-outlined">add</span> Agregar producto
-        </button>
-
-        <div class="flex items-end gap-4 mb-4">
-          <div>
-            <label class="block text-label-bold font-label-bold uppercase tracking-wide text-on-surface-variant mb-1">Validez (días)</label>
-            <input id="q-validity" type="number" min="1" value="8" class="w-24 p-2.5 border border-outline-variant rounded-md outline-none focus:border-outline focus:ring-2 focus:ring-outline/20" />
-          </div>
-          <div class="flex-1 text-right">
-            <p class="text-body-sm text-on-surface-variant">Subtotal estimado (sin IVA)</p>
-            <p id="q-subtotal" class="text-headline-sm font-headline-sm font-bold text-on-surface">$ 0</p>
-          </div>
-        </div>
-
-        <div id="q-result" class="hidden mb-4 p-4 rounded-lg bg-secondary-container text-on-secondary-container"></div>
-
+        <div data-editor></div>
         <div class="flex justify-end gap-2">
-          <button id="q-cancel" type="button" class="btn btn-secondary">Cancelar</button>
-          <button id="q-ok" type="button" class="btn btn-primary">Crear cotización</button>
+          <button type="button" data-cancel class="btn btn-secondary">Cancelar</button>
+          <button type="button" data-ok class="btn btn-primary">Crear cotización</button>
         </div>
       `;
-
-      const linesEl = body.querySelector('#q-lines');
-      const subtotalEl = body.querySelector('#q-subtotal');
-
-      function lineRow() {
-        const row = document.createElement('div');
-        row.className = 'q-line grid grid-cols-[1fr_5rem_8rem_auto] gap-2 items-center';
-        row.innerHTML = `
-          <select class="q-prod p-2 border border-outline-variant rounded-md outline-none focus:border-outline text-body-sm">${optionsHtml}</select>
-          <input class="q-qty p-2 border border-outline-variant rounded-md outline-none focus:border-outline text-body-sm" type="number" min="0" step="1" value="1" />
-          <input class="q-price p-2 border border-outline-variant rounded-md outline-none focus:border-outline text-body-sm" type="number" min="0" step="1000" placeholder="precio lista" />
-          <button type="button" class="q-del btn btn-icon" aria-label="Quitar"><span class="material-symbols-outlined">delete</span></button>
-        `;
-        const prod = row.querySelector('.q-prod');
-        const price = row.querySelector('.q-price');
-        const syncPlaceholder = () => {
-          const opt = prod.selectedOptions[0];
-          price.placeholder = opt ? Number(opt.dataset.price || 0).toLocaleString('es-CO') : 'precio lista';
-        };
-        prod.addEventListener('change', () => { syncPlaceholder(); recalc(); });
-        row.querySelector('.q-qty').addEventListener('input', recalc);
-        price.addEventListener('input', recalc);
-        row.querySelector('.q-del').addEventListener('click', () => { row.remove(); recalc(); });
-        syncPlaceholder();
-        linesEl.appendChild(row);
-        recalc();
-      }
-
-      function readLines() {
-        return [...linesEl.querySelectorAll('.q-line')].map((row) => {
-          const opt = row.querySelector('.q-prod').selectedOptions[0];
-          const priceRaw = row.querySelector('.q-price').value;
-          return {
-            product_id: Number(row.querySelector('.q-prod').value),
-            qty: Number(row.querySelector('.q-qty').value) || 0,
-            price_unit: priceRaw === '' ? undefined : Number(priceRaw),
-            _listPrice: Number(opt?.dataset.price || 0),
-          };
-        });
-      }
-
-      function recalc() {
-        const sub = readLines().reduce((s, l) => s + l.qty * (l.price_unit ?? l._listPrice), 0);
-        subtotalEl.textContent = money(sub);
-      }
-
-      body.querySelector('#q-add').addEventListener('click', lineRow);
-      body.querySelector('#q-cancel').addEventListener('click', close);
-      lineRow();
-
-      const okBtn = body.querySelector('#q-ok');
-      const resultEl = body.querySelector('#q-result');
+      const editor = mountQuotationLineEditor(body.querySelector('[data-editor]'), products);
+      body.querySelector('[data-cancel]').addEventListener('click', close);
+      const okBtn = body.querySelector('[data-ok]');
       okBtn.addEventListener('click', async () => {
-        const lines = readLines().filter((l) => l.product_id && l.qty > 0).map(({ _listPrice, ...l }) => l);
+        const lines = editor.readLines();
         if (!lines.length) {
           ctx.toast('Agrega al menos un producto con cantidad', 'error');
           return;
         }
-        okBtn.dataset.loading = '';
+        okBtn.disabled = true;
         try {
           const { quotation } = await ctx.api.post(`/api/leads/${lead.id}/quotation`, {
             lines,
-            validity_days: Number(body.querySelector('#q-validity').value) || 8,
+            validity_days: editor.validityDays(),
           });
-          resultEl.classList.remove('hidden');
-          resultEl.innerHTML = `
-            <p class="font-bold text-body-md mb-1">Cotización ${escapeHtml(quotation.name)} creada en Odoo</p>
-            <p class="text-body-sm">Subtotal: ${money(quotation.amount_untaxed)} · IVA: ${money(quotation.amount_tax)}</p>
-            <p class="text-headline-sm font-headline-sm font-bold mt-1">Total: ${money(quotation.amount_total)}</p>
-            <a href="/api/leads/${lead.id}/quotation/pdf" target="_blank" rel="noopener" class="btn btn-primary mt-3 inline-flex">
-              <span class="material-symbols-outlined">picture_as_pdf</span> Ver / descargar PDF
-            </a>
-          `;
-          okBtn.textContent = 'Listo';
-          okBtn.disabled = true;
           ctx.toast('Cotización creada en Odoo', 'success');
+          renderQuotationResult(body, lead, quotation, ctx, { close, onDone });
           onDone?.();
         } catch (err) {
           ctx.toast(err.message, 'error');
-        } finally {
-          delete okBtn.dataset.loading;
+          okBtn.disabled = false;
         }
       });
+    },
+  });
+}
+
+// Ver / editar / enviar / confirmar una cotización que YA existe en Odoo.
+export async function openQuotationViewModal(lead, ctx, onDone) {
+  let data;
+  try {
+    data = await ctx.api.get(`/api/leads/${lead.id}/quotation`);
+  } catch (err) {
+    ctx.toast(err.message, 'error');
+    return;
+  }
+
+  openModal({
+    title: `Cotización ${escapeHtml(data.quotation.name)} · ${escapeHtml(lead.client_name)}`,
+    wide: true,
+    render: (body, { close }) => {
+      function showView(q) {
+        body.innerHTML = `
+          <div class="mb-4 overflow-x-auto">
+            <table class="w-full text-body-sm border-collapse">
+              <thead><tr class="text-left text-on-surface-variant border-b border-outline-variant">
+                <th class="py-1.5 pr-2">Producto</th>
+                <th class="py-1.5 px-2 text-right">Cant.</th>
+                <th class="py-1.5 px-2 text-right">Precio</th>
+                <th class="py-1.5 pl-2 text-right">Subtotal</th>
+              </tr></thead>
+              <tbody>
+                ${q.lines.map((l) => `<tr class="border-b border-outline-variant/50">
+                  <td class="py-1.5 pr-2">${escapeHtml(Array.isArray(l.product_id) ? l.product_id[1] : (l.name || '—'))}</td>
+                  <td class="py-1.5 px-2 text-right">${l.product_uom_qty}</td>
+                  <td class="py-1.5 px-2 text-right">${money(l.price_unit)}</td>
+                  <td class="py-1.5 pl-2 text-right">${money(l.price_subtotal)}</td>
+                </tr>`).join('')}
+              </tbody>
+            </table>
+          </div>
+          <div class="flex items-center justify-between mb-4 gap-3">
+            <span class="px-2 py-0.5 rounded text-[11px] font-bold bg-surface-container-high text-on-surface shrink-0">${escapeHtml(q.state_label || '')}</span>
+            <div class="text-right">
+              <p class="text-body-sm text-on-surface-variant">Subtotal ${money(q.amount_untaxed)} · IVA ${money(q.amount_tax)}</p>
+              <p class="text-headline-sm font-headline-sm font-bold">Total: ${money(q.amount_total)}</p>
+            </div>
+          </div>
+          <div class="flex flex-wrap gap-2">
+            <a href="/api/leads/${lead.id}/quotation/pdf" target="_blank" rel="noopener" class="btn btn-secondary inline-flex">
+              <span class="material-symbols-outlined">picture_as_pdf</span> Ver / descargar PDF
+            </a>
+            ${q.state === 'draft' ? `<button type="button" data-send class="btn btn-secondary">Marcar como enviada</button>` : ''}
+            ${!q.is_confirmed ? `<button type="button" data-edit class="btn btn-secondary">Editar líneas</button>` : ''}
+            ${!q.is_confirmed ? `<button type="button" data-confirm class="btn btn-primary">Confirmar venta</button>` : ''}
+          </div>
+          <div class="flex justify-end mt-4"><button type="button" data-close class="btn btn-secondary">Cerrar</button></div>
+        `;
+        body.querySelector('[data-close]').addEventListener('click', close);
+        body.querySelector('[data-send]')?.addEventListener('click', async (e) => {
+          e.target.disabled = true;
+          try {
+            const r = await ctx.api.post(`/api/leads/${lead.id}/quotation/send`);
+            ctx.toast('Cotización marcada como enviada', 'success');
+            showView(r.quotation);
+            onDone?.();
+          } catch (err) {
+            ctx.toast(err.message, 'error');
+            e.target.disabled = false;
+          }
+        });
+        body.querySelector('[data-confirm]')?.addEventListener('click', () => {
+          close();
+          openCloseModal({ ...lead, odoo_order_id: q.id, sale_reference: q.name, amount: q.amount_total }, ctx, onDone);
+        });
+        body.querySelector('[data-edit]')?.addEventListener('click', async () => {
+          let products;
+          try {
+            products = await fetchOdooProducts(ctx);
+          } catch (err) {
+            ctx.toast(err.message, 'error');
+            return;
+          }
+          const initial = q.lines.map((l) => ({
+            product_id: Array.isArray(l.product_id) ? l.product_id[0] : null,
+            qty: l.product_uom_qty,
+            price_unit: l.price_unit,
+          }));
+          body.innerHTML = `
+            <div data-editor></div>
+            <div class="flex justify-end gap-2">
+              <button type="button" data-cancel-edit class="btn btn-secondary">Cancelar</button>
+              <button type="button" data-save-edit class="btn btn-primary">Guardar líneas</button>
+            </div>
+          `;
+          const editor = mountQuotationLineEditor(body.querySelector('[data-editor]'), products, initial, { hideValidity: true });
+          body.querySelector('[data-cancel-edit]').addEventListener('click', () => showView(q));
+          const saveBtn = body.querySelector('[data-save-edit]');
+          saveBtn.addEventListener('click', async () => {
+            const lines = editor.readLines();
+            if (!lines.length) {
+              ctx.toast('Agrega al menos un producto con cantidad', 'error');
+              return;
+            }
+            saveBtn.disabled = true;
+            try {
+              const r = await ctx.api.put(`/api/leads/${lead.id}/quotation`, { lines });
+              ctx.toast('Cotización actualizada', 'success');
+              showView(r.quotation);
+              onDone?.();
+            } catch (err) {
+              ctx.toast(err.message, 'error');
+              saveBtn.disabled = false;
+            }
+          });
+        });
+      }
+      showView(data.quotation);
     },
   });
 }
@@ -387,7 +559,12 @@ export function openCloseModal(lead, ctx, onDone) {
         </div>
         <div id="amount-field">
           <label class="block text-label-bold font-label-bold uppercase tracking-wide text-on-surface-variant mb-1">Monto de la venta (COP)</label>
-          <input id="close-amount" type="number" min="0" step="1000" placeholder="0" class="w-full p-2.5 border border-outline-variant rounded-md mb-4 outline-none focus:border-outline focus:ring-2 focus:ring-outline/20" />
+          <input id="close-amount" type="number" min="0" step="1000" placeholder="0" value="${lead.odoo_order_id && lead.amount ? Math.round(lead.amount) : ''}" class="w-full p-2.5 border border-outline-variant rounded-md mb-2 outline-none focus:border-outline focus:ring-2 focus:ring-outline/20" />
+          ${
+            lead.odoo_order_id
+              ? `<p class="text-[11px] text-on-surface-variant mb-4 flex items-start gap-1"><span class="material-symbols-outlined text-[13px]">info</span>Se confirmará la cotización ${escapeHtml(lead.sale_reference || '')} como Pedido de venta en Odoo. El total del pedido confirmado será el monto final.</p>`
+              : '<div class="mb-4"></div>'
+          }
         </div>
         ${dateFieldHtml('close-at', 'Fecha y hora del cierre')}
         <div class="flex justify-end gap-2">
@@ -404,16 +581,20 @@ export function openCloseModal(lead, ctx, onDone) {
         });
       });
       body.querySelector('#close-cancel').addEventListener('click', close);
-      body.querySelector('#close-ok').addEventListener('click', async () => {
+      const okBtn = body.querySelector('#close-ok');
+      okBtn.addEventListener('click', async () => {
         const amount = body.querySelector('#close-amount').value || 0;
         const at = body.querySelector('#close-at').value;
+        okBtn.disabled = true;
         try {
-          await ctx.api.post(`/api/leads/${lead.id}/close`, { result, amount, at });
+          const closed = await ctx.api.post(`/api/leads/${lead.id}/close`, { result, amount, at });
           ctx.toast(result === 'ganado' ? '¡Venta cerrada como ganada!' : 'Lead cerrado como perdido', 'success');
+          if (closed && closed.odoo_warning) ctx.toast(closed.odoo_warning, 'error');
           close();
           onDone?.();
         } catch (err) {
           ctx.toast(err.message, 'error');
+          okBtn.disabled = false;
         }
       });
     },

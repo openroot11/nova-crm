@@ -1,5 +1,5 @@
 import { escapeHtml, slaBadge, copyNameBtn, bindCopyButtons, canReassignLead } from '../utils.js';
-import { openReassignModal, markContacted, markQuoted, markStillInContact } from '../components/leadActions.js';
+import { openReassignModal, markContacted, openQuotationModal, markStillInContact } from '../components/leadActions.js';
 
 const PAGE_SIZE = 50;
 
@@ -146,7 +146,7 @@ export async function mount(container, ctx) {
     const quoteBtn = e.target.closest('.quote-btn');
     if (quoteBtn) {
       const lead = critical.find((l) => l.id === Number(quoteBtn.dataset.id));
-      if (lead) markQuoted(lead, ctx, load);
+      if (lead) openQuotationModal(lead, ctx, load);
       return;
     }
     const stillContactBtn = e.target.closest('.still-contact-btn');

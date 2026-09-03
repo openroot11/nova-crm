@@ -92,6 +92,20 @@ export async function mount(container, ctx) {
         <section class="bg-surface-container-lowest border border-outline-variant rounded-xl p-gutter shadow-sm col-span-1 md:col-span-2 mt-4">
           <div class="flex items-center justify-between gap-3 mb-6 border-b border-outline-variant pb-3">
             <div class="flex items-center gap-3">
+              <span class="material-symbols-outlined text-on-surface-variant text-2xl">hub</span>
+              <h3 class="text-headline-md font-headline-md text-on-surface">Conexión con Odoo</h3>
+            </div>
+            <button id="odoo-test-btn" class="bg-surface-container hover:bg-surface-container-high text-on-surface px-4 py-2 rounded-lg text-label-bold font-label-bold border border-outline-variant transition-colors flex items-center gap-2">
+              <span class="material-symbols-outlined text-sm">wifi_tethering</span> Probar conexión
+            </button>
+          </div>
+          <div id="odoo-status" class="text-body-sm font-body-sm text-on-surface-variant">Cargando…</div>
+          <p class="text-[11px] text-on-surface-variant mt-3">La conexión se configura en <code class="bg-surface-container px-1 rounded">server/.env</code> (ODOO_URL, ODOO_DB, ODOO_USER, ODOO_PASSWORD). Las cotizaciones y los pedidos de venta se crean en esta instancia de Odoo.</p>
+        </section>
+
+        <section class="bg-surface-container-lowest border border-outline-variant rounded-xl p-gutter shadow-sm col-span-1 md:col-span-2 mt-4">
+          <div class="flex items-center justify-between gap-3 mb-6 border-b border-outline-variant pb-3">
+            <div class="flex items-center gap-3">
               <span class="material-symbols-outlined text-on-surface-variant text-2xl">manage_accounts</span>
               <h3 class="text-headline-md font-headline-md text-on-surface">Usuarios y Roles</h3>
             </div>
@@ -158,6 +172,48 @@ export async function mount(container, ctx) {
       ctx.api.put('/api/settings', { auto_backup_weekly: e.target.checked }).catch((err) => ctx.toast(err.message, 'error'));
     });
   }
+
+  // --- Conexión con Odoo (solo lectura) ------------------------------
+  const odooStatusEl = container.querySelector('#odoo-status');
+  const odooTestBtn = container.querySelector('#odoo-test-btn');
+
+  function odooRow(label, value) {
+    return `<div class="flex gap-2"><span class="w-28 shrink-0 text-on-surface-variant">${label}</span><span class="font-semibold text-on-surface break-all">${escapeHtml(value || '—')}</span></div>`;
+  }
+
+  async function loadOdoo() {
+    odooStatusEl.innerHTML = 'Consultando…';
+    let s;
+    try {
+      s = await ctx.api.get('/api/odoo/status');
+    } catch (err) {
+      odooStatusEl.innerHTML = `<span class="text-error font-semibold">No se pudo consultar el estado (${escapeHtml(err.message)})</span>`;
+      return;
+    }
+    if (!s.enabled) {
+      odooStatusEl.innerHTML = `<span class="inline-flex items-center gap-1 text-on-surface-variant"><span class="w-2 h-2 rounded-full bg-outline-variant"></span>Sin configurar</span> — la integración con Odoo está apagada; el CRM funciona igual, pero sin cotizaciones ni pedidos de venta.`;
+      return;
+    }
+    if (s.ok === false) {
+      odooStatusEl.innerHTML = `<span class="inline-flex items-center gap-1 text-error font-semibold"><span class="w-2 h-2 rounded-full bg-error"></span>Configurado, pero no responde</span><p class="mt-1 text-error">${escapeHtml(s.error || 'error desconocido')}</p>`;
+      return;
+    }
+    odooStatusEl.innerHTML = `
+      <div class="inline-flex items-center gap-1.5 mb-3 text-secondary font-semibold"><span class="w-2 h-2 rounded-full bg-secondary"></span>Conectado</div>
+      <div class="space-y-1">
+        ${odooRow('Servidor', s.url)}
+        ${odooRow('Base de datos', s.db)}
+        ${odooRow('Empresa', s.company)}
+        ${odooRow('Usuario', `${s.user || ''}${s.login ? ` (${s.login})` : ''}`)}
+      </div>`;
+  }
+
+  odooTestBtn.addEventListener('click', async () => {
+    odooTestBtn.disabled = true;
+    await loadOdoo();
+    odooTestBtn.disabled = false;
+    ctx.toast('Estado de Odoo actualizado', 'success');
+  });
 
   // --- Usuarios y Roles -----------------------------------------------
   const usersTbody = container.querySelector('#users-tbody');
@@ -343,5 +399,5 @@ export async function mount(container, ctx) {
     });
   });
 
-  await Promise.all([load(), loadUsers()]);
+  await Promise.all([load(), loadUsers(), loadOdoo()]);
 }
