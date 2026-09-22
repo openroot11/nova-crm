@@ -16,6 +16,9 @@ server/.env
 _backup_pre_*/
 _ads_pdfs/
 
+# Documentos de clientes (cotizaciones, RUT, informes): solo locales
+documentos-clientes/
+
 # Binarios sueltos / adjuntos de trabajo
 *.zip
 "Captura de pantalla"*.png

@@ -38,7 +38,10 @@ app/
   server/     Backend (Node.js + Express + SQLite + WebSocket)
   public/     Frontend (HTML/CSS/JS, sin paso de compilación)
   iniciar.bat Lanzador para Windows
+  docs/       Notas del proyecto, tecnologías, diseño (logo/paleta) y referencias
 ```
+
+La carpeta `documentos-clientes/` (cotizaciones, RUT, informes) es solo local y no se sube al repositorio.
 
 Los backups automáticos/manuales (exportación JSON) se guardan en `server/backups/`.
 
