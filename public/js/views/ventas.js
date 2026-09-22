@@ -176,101 +176,74 @@ export async function mount(container, ctx) {
   container.innerHTML = `
     <div class="grid grid-cols-1 xl:grid-cols-12 gap-gutter items-start">
       ${canCreate ? `
-      <div id="alta-rapida-col" class="hidden xl:col-span-4 bg-surface rounded-xl border border-outline-variant shadow-sm p-6">
-        <div class="flex items-center justify-between mb-6">
-          <h3 class="text-headline-md font-headline-md text-on-surface">Alta Rápida</h3>
-          <button type="button" id="alta-rapida-close-btn" class="p-1 -m-1 text-on-surface-variant hover:text-on-surface transition-colors" title="Ocultar Alta Rápida">
-            <span class="material-symbols-outlined">close</span>
-          </button>
+      <div id="alta-rapida-col" class="hidden xl:col-span-4 bg-surface rounded-xl border border-outline-variant shadow-sm p-5">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="text-body-md font-semibold text-on-surface">Nuevo cliente</h3>
+          <div class="flex items-center gap-3">
+            <button type="button" id="f-paste-toggle" class="text-on-surface-variant hover:text-on-surface transition-colors" title="Pegar datos del cliente">
+              <span class="material-symbols-outlined text-[20px]">content_paste</span>
+            </button>
+            <button type="button" id="alta-rapida-close-btn" class="text-on-surface-variant hover:text-on-surface transition-colors" title="Cerrar">
+              <span class="material-symbols-outlined text-[20px]">close</span>
+            </button>
+          </div>
         </div>
-        <form id="alta-form" class="space-y-5">
-          <div class="p-3 bg-surface-container-low border border-dashed border-outline-variant rounded-md">
-            <label class="flex items-center gap-1 text-label-bold font-label-bold text-on-surface-variant mb-1 uppercase tracking-wider">
-              <span class="material-symbols-outlined text-[15px]">content_paste</span>Pegar datos del cliente
-            </label>
-            <textarea id="f-paste" rows="2" placeholder="Pega aquí el bloque con nombre, NIT/cédula, dirección, ciudad, teléfono y correo — se autocompleta solo." class="w-full p-2 bg-surface border border-outline-variant rounded-md text-body-sm focus:border-outline focus:ring-2 focus:ring-outline/20 outline-none transition-all resize-none"></textarea>
-            <div class="flex items-center justify-between mt-1.5">
-              <p class="text-[11px] text-on-surface-variant">Se llenan los campos de abajo automáticamente.</p>
-              <button type="button" id="f-paste-apply" class="shrink-0 text-[11px] font-label-bold text-on-surface hover:underline">Autocompletar</button>
+        <form id="alta-form" class="space-y-3">
+          <div id="f-paste-wrap" class="hidden">
+            <textarea id="f-paste" rows="3" aria-label="Pegar datos del cliente" placeholder="Pega aquí los datos del cliente" class="w-full p-2.5 bg-surface-container-lowest border border-dashed border-outline-variant rounded-md text-body-sm focus:border-outline focus:ring-2 focus:ring-outline/20 outline-none transition-all resize-none"></textarea>
+            <div class="text-right">
+              <button type="button" id="f-paste-apply" class="text-[11px] font-label-bold text-on-surface-variant hover:text-on-surface">Autocompletar</button>
             </div>
           </div>
           <div class="relative">
-            <label class="block text-label-bold font-label-bold text-on-surface-variant mb-1 uppercase tracking-wider">Nombre del Cliente *</label>
-            <input id="f-nombre" required type="text" autocomplete="off" placeholder="Ej. Juan Pérez — escribe para buscar clientes existentes" class="w-full p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md focus:border-outline focus:ring-2 focus:ring-outline/20 outline-none transition-all" />
+            <input id="f-nombre" required type="text" autocomplete="off" aria-label="Nombre del cliente" placeholder="Nombre *" class="w-full p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md focus:border-outline focus:ring-2 focus:ring-outline/20 outline-none transition-all" />
             <div id="f-nombre-suggestions" class="hidden absolute z-20 mt-1 w-full bg-surface border border-outline-variant rounded-md shadow-lg max-h-56 overflow-y-auto"></div>
-            <p id="f-cliente-hint" class="hidden text-[11px] text-secondary mt-1 flex items-center gap-1"><span class="material-symbols-outlined text-[13px]">check_circle</span>Cliente existente vinculado — se sumará a su ficha en Clientes.</p>
+            <p id="f-cliente-hint" class="hidden text-[11px] text-secondary mt-1 flex items-center gap-1"><span class="material-symbols-outlined text-[13px]">check_circle</span>Cliente existente</p>
           </div>
-          <div class="grid grid-cols-2 gap-4">
-            <div>
-              <label class="block text-label-bold font-label-bold text-on-surface-variant mb-1 uppercase tracking-wider">Teléfono *</label>
-              <input id="f-telefono" required type="tel" placeholder="300 000 0000" class="w-full p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md focus:border-outline focus:ring-2 focus:ring-outline/20 outline-none transition-all" />
-            </div>
-            <div>
-              <label class="block text-label-bold font-label-bold text-on-surface-variant mb-1 uppercase tracking-wider">Documento</label>
-              <input id="f-documento" type="text" placeholder="Opcional" class="w-full p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md focus:border-outline focus:ring-2 focus:ring-outline/20 outline-none transition-all" />
-            </div>
+          <div class="grid grid-cols-2 gap-3">
+            <input id="f-telefono" required type="tel" aria-label="Teléfono" placeholder="Teléfono *" class="w-full p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md focus:border-outline focus:ring-2 focus:ring-outline/20 outline-none transition-all" />
+            <input id="f-documento" type="text" aria-label="Documento" placeholder="Documento" class="w-full p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md focus:border-outline focus:ring-2 focus:ring-outline/20 outline-none transition-all" />
           </div>
-          <div class="grid grid-cols-2 gap-4">
-            <div>
-              <label class="block text-label-bold font-label-bold text-on-surface-variant mb-1 uppercase tracking-wider">Correo Electrónico</label>
-              <input id="f-correo" type="email" placeholder="Opcional" class="w-full p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md focus:border-outline focus:ring-2 focus:ring-outline/20 outline-none transition-all" />
-            </div>
-            <div>
-              <label class="block text-label-bold font-label-bold text-on-surface-variant mb-1 uppercase tracking-wider">Dirección</label>
-              <input id="f-direccion" type="text" placeholder="Opcional" class="w-full p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md focus:border-outline focus:ring-2 focus:ring-outline/20 outline-none transition-all" />
-            </div>
+          <div class="grid grid-cols-2 gap-3">
+            <input id="f-correo" type="email" aria-label="Correo electrónico" placeholder="Correo" class="w-full p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md focus:border-outline focus:ring-2 focus:ring-outline/20 outline-none transition-all" />
+            <input id="f-direccion" type="text" aria-label="Dirección" placeholder="Dirección" class="w-full p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md focus:border-outline focus:ring-2 focus:ring-outline/20 outline-none transition-all" />
           </div>
           <div>
-            <label class="block text-label-bold font-label-bold text-on-surface-variant mb-1 uppercase tracking-wider">Asignar a Asesor *</label>
-            <div id="f-asesor-suggestion" class="hidden p-3 border border-outline-variant rounded-md bg-surface-container-lowest flex items-center justify-between gap-3">
-              <div class="min-w-0">
-                <p class="text-[10px] font-label-bold text-on-surface-variant uppercase tracking-wider">Turno sugerido</p>
+            <div id="f-asesor-suggestion" class="hidden px-3 py-2 border border-outline-variant rounded-md bg-surface-container-lowest flex items-center justify-between gap-3" title="Asesor sugerido por turno">
+              <div class="min-w-0 flex items-baseline gap-2">
                 <p id="f-asesor-suggestion-name" class="font-bold text-on-surface truncate">—</p>
-                <p id="f-asesor-suggestion-reason" class="text-[11px] text-on-surface-variant"></p>
+                <p id="f-asesor-suggestion-reason" class="text-[11px] text-on-surface-variant truncate"></p>
               </div>
-              <button type="button" id="f-asesor-change-btn" class="shrink-0 text-body-sm font-label-bold text-on-surface hover:underline">Elegir otro</button>
+              <button type="button" id="f-asesor-change-btn" class="shrink-0 text-body-sm font-label-bold text-on-surface-variant hover:text-on-surface">Cambiar</button>
             </div>
-            <select id="f-asesor" required class="w-full p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md focus:border-outline focus:ring-2 focus:ring-outline/20 outline-none transition-all appearance-none cursor-pointer">
+            <select id="f-asesor" required aria-label="Asesor" title="Asesor" class="w-full p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md focus:border-outline focus:ring-2 focus:ring-outline/20 outline-none transition-all appearance-none cursor-pointer">
               <option value="">Cargando asesores…</option>
             </select>
           </div>
-          <div>
-            <label class="block text-label-bold font-label-bold text-on-surface-variant mb-1 uppercase tracking-wider">Producto de Interés</label>
-            <select id="f-producto" class="w-full p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md focus:border-outline focus:ring-2 focus:ring-outline/20 outline-none transition-all appearance-none cursor-pointer">
+          <div class="grid grid-cols-2 gap-3">
+            <select id="f-producto" aria-label="Producto" title="Producto" class="w-full p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md focus:border-outline focus:ring-2 focus:ring-outline/20 outline-none transition-all appearance-none cursor-pointer">
               ${PRODUCTS.map((p) => `<option value="${p}">${p}</option>`).join('')}
             </select>
-            <input id="f-producto-otro" type="text" placeholder="Especifica el producto..." class="hidden mt-2 w-full p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md focus:border-outline focus:ring-2 focus:ring-outline/20 outline-none transition-all" />
-          </div>
-          <div>
-            <label class="block text-label-bold font-label-bold text-on-surface-variant mb-1 uppercase tracking-wider">Canal de Entrada</label>
-            <select id="f-source" class="w-full p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md focus:border-outline focus:ring-2 focus:ring-outline/20 outline-none transition-all appearance-none cursor-pointer">
+            <select id="f-source" aria-label="Canal" title="Canal" class="w-full p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md focus:border-outline focus:ring-2 focus:ring-outline/20 outline-none transition-all appearance-none cursor-pointer">
               ${SOURCES.map((s) => `<option value="${s}" ${s === DEFAULT_SOURCE ? 'selected' : ''}>${s}</option>`).join('')}
             </select>
           </div>
+          <input id="f-producto-otro" type="text" aria-label="Otro producto" placeholder="¿Qué producto?" class="hidden w-full p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md focus:border-outline focus:ring-2 focus:ring-outline/20 outline-none transition-all" />
+          <select id="f-ciudad" aria-label="Ciudad" title="Ciudad" class="w-full p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md focus:border-outline focus:ring-2 focus:ring-outline/20 outline-none transition-all appearance-none cursor-pointer">
+            <option value="">Ciudad</option>
+            ${COLOMBIA_CITY_NAMES.map((c) => `<option value="${c}">${c}</option>`).join('')}
+          </select>
+          <textarea id="f-notas" rows="2" aria-label="Notas" placeholder="Notas" class="w-full p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md focus:border-outline focus:ring-2 focus:ring-outline/20 outline-none transition-all resize-none"></textarea>
           <div>
-            <label class="block text-label-bold font-label-bold text-on-surface-variant mb-1 uppercase tracking-wider">Ciudad</label>
-            <select id="f-ciudad" class="w-full p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md focus:border-outline focus:ring-2 focus:ring-outline/20 outline-none transition-all appearance-none cursor-pointer">
-              <option value="">Sin especificar</option>
-              ${COLOMBIA_CITY_NAMES.map((c) => `<option value="${c}">${c}</option>`).join('')}
-            </select>
-          </div>
-          <div>
-            <label class="block text-label-bold font-label-bold text-on-surface-variant mb-1 uppercase tracking-wider">Notas Rápidas</label>
-            <textarea id="f-notas" rows="3" placeholder="Detalles de la consulta inicial..." class="w-full p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md focus:border-outline focus:ring-2 focus:ring-outline/20 outline-none transition-all resize-none"></textarea>
-          </div>
-          <div>
-            <button type="button" id="toggle-fecha" class="text-body-sm font-label-bold text-on-surface hover:text-on-primary-fixed-variant transition-colors inline-flex items-center gap-1">
-              <span class="material-symbols-outlined text-[16px]">event</span> ¿Es de un día anterior? Cambia la fecha
+            <button type="button" id="toggle-fecha" class="text-[11px] font-label-bold text-on-surface-variant hover:text-on-surface transition-colors inline-flex items-center gap-1">
+              <span class="material-symbols-outlined text-[14px]">event</span> Otra fecha
             </button>
             <div id="fecha-wrap" class="hidden mt-2">
-              <label class="block text-label-bold font-label-bold text-on-surface-variant mb-1 uppercase tracking-wider">Fecha y hora real de registro</label>
-              <input id="f-fecha" type="datetime-local" class="w-full p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md focus:border-outline focus:ring-2 focus:ring-outline/20 outline-none transition-all" />
-              <p class="text-[11px] text-on-surface-variant mt-1">Úsalo para meter clientes atrasados con su fecha real — así los reportes cuadran.</p>
+              <input id="f-fecha" type="datetime-local" aria-label="Fecha de registro" title="Fecha de registro" class="w-full p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md focus:border-outline focus:ring-2 focus:ring-outline/20 outline-none transition-all" />
             </div>
           </div>
-          <button type="submit" class="w-full py-3 bg-primary text-on-primary rounded-md font-label-bold text-label-bold hover:bg-on-primary-fixed-variant transition-colors flex items-center justify-center shadow-sm">
-            <span class="material-symbols-outlined mr-2 text-[18px]">how_to_reg</span>
-            REGISTRAR CLIENTE Y ASIGNAR
+          <button type="submit" class="w-full py-2.5 bg-primary text-on-primary rounded-md font-label-bold text-label-bold hover:bg-on-primary-fixed-variant transition-colors flex items-center justify-center">
+            Registrar
           </button>
         </form>
       </div>` : ''}
@@ -547,6 +520,11 @@ export async function mount(container, ctx) {
     }
     pasteInput.addEventListener('paste', () => setTimeout(applyClientPaste, 0));
     pasteApplyBtn.addEventListener('click', applyClientPaste);
+    const pasteWrap = container.querySelector('#f-paste-wrap');
+    container.querySelector('#f-paste-toggle').addEventListener('click', () => {
+      pasteWrap.classList.toggle('hidden');
+      if (!pasteWrap.classList.contains('hidden')) pasteInput.focus();
+    });
   }
 
   // Muestra el turno sugerido (GET /api/advisors/suggest-turn) en vez del

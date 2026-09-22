@@ -244,34 +244,16 @@ export async function mount(container, ctx) {
 
   container.querySelector('#new-client-btn').addEventListener('click', () => {
     openModal({
-      title: 'Crear nuevo cliente',
+      title: 'Nuevo cliente',
       render: (body, { close }) => {
         body.innerHTML = `
-          <div class="space-y-4">
-            <div>
-              <label class="block text-label-bold font-label-bold text-on-surface-variant mb-1 uppercase tracking-wider">Nombre completo</label>
-              <input id="new-client-name" type="text" class="w-full p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md outline-none focus:border-outline focus:ring-2 focus:ring-outline/20" />
-            </div>
-            <div>
-              <label class="block text-label-bold font-label-bold text-on-surface-variant mb-1 uppercase tracking-wider">Teléfono</label>
-              <input id="new-client-phone" type="tel" class="w-full p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md outline-none focus:border-outline focus:ring-2 focus:ring-outline/20" />
-            </div>
-            <div>
-              <label class="block text-label-bold font-label-bold text-on-surface-variant mb-1 uppercase tracking-wider">Documento</label>
-              <input id="new-client-document" type="text" class="w-full p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md outline-none focus:border-outline focus:ring-2 focus:ring-outline/20" />
-            </div>
-            <div>
-              <label class="block text-label-bold font-label-bold text-on-surface-variant mb-1 uppercase tracking-wider">Correo electrónico</label>
-              <input id="new-client-email" type="email" class="w-full p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md outline-none focus:border-outline focus:ring-2 focus:ring-outline/20" />
-            </div>
-            <div>
-              <label class="block text-label-bold font-label-bold text-on-surface-variant mb-1 uppercase tracking-wider">Dirección</label>
-              <input id="new-client-address" type="text" class="w-full p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md outline-none focus:border-outline focus:ring-2 focus:ring-outline/20" />
-            </div>
-            <div>
-              <label class="block text-label-bold font-label-bold text-on-surface-variant mb-1 uppercase tracking-wider">Notas</label>
-              <textarea id="new-client-notes" rows="3" class="w-full p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md outline-none focus:border-outline focus:ring-2 focus:ring-outline/20"></textarea>
-            </div>
+          <div class="space-y-3">
+            <input id="new-client-name" type="text" aria-label="Nombre" placeholder="Nombre *" class="w-full p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md outline-none focus:border-outline focus:ring-2 focus:ring-outline/20" />
+            <input id="new-client-phone" type="tel" aria-label="Teléfono" placeholder="Teléfono" class="w-full p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md outline-none focus:border-outline focus:ring-2 focus:ring-outline/20" />
+            <input id="new-client-document" type="text" aria-label="Documento" placeholder="Documento" class="w-full p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md outline-none focus:border-outline focus:ring-2 focus:ring-outline/20" />
+            <input id="new-client-email" type="email" aria-label="Correo" placeholder="Correo" class="w-full p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md outline-none focus:border-outline focus:ring-2 focus:ring-outline/20" />
+            <input id="new-client-address" type="text" aria-label="Dirección" placeholder="Dirección" class="w-full p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md outline-none focus:border-outline focus:ring-2 focus:ring-outline/20" />
+            <textarea id="new-client-notes" rows="2" aria-label="Notas" placeholder="Notas" class="w-full p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md outline-none focus:border-outline focus:ring-2 focus:ring-outline/20 resize-none"></textarea>
             <p id="new-client-error" class="text-body-sm font-body-sm text-error hidden"></p>
             <div class="flex justify-end gap-2">
               <button id="new-client-cancel" class="px-4 py-2 rounded-lg border border-outline-variant hover:bg-surface-container-low">Cancelar</button>
