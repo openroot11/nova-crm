@@ -92,6 +92,73 @@ export async function mount(container, ctx) {
         <section class="bg-surface-container-lowest border border-outline-variant rounded-xl p-gutter shadow-sm col-span-1 md:col-span-2 mt-4">
           <div class="flex items-center justify-between gap-3 mb-6 border-b border-outline-variant pb-3">
             <div class="flex items-center gap-3">
+              <span class="material-symbols-outlined text-on-surface-variant text-2xl">sell</span>
+              <h3 class="text-headline-md font-headline-md text-on-surface">Lista de precios (Cotizar)</h3>
+            </div>
+            <button id="add-product-btn" class="px-4 py-2 bg-primary text-on-primary text-label-bold font-label-bold rounded-lg hover:bg-on-primary-fixed-variant transition-colors flex items-center gap-2 shadow-sm">
+              <span class="material-symbols-outlined text-[18px]">add</span> Nuevo producto
+            </button>
+          </div>
+          <p class="text-body-sm font-body-sm text-on-surface-variant -mt-3 mb-4">Catálogo propio del CRM (no viene de Odoo) que alimenta el buscador de productos de la pestaña "Cotizar".</p>
+          <div class="overflow-x-auto">
+            <table class="w-full text-left border-collapse min-w-[480px]">
+              <thead>
+                <tr class="bg-surface-container-low border-b border-outline-variant">
+                  <th class="p-table-cell-padding text-label-bold font-label-bold text-on-surface-variant uppercase tracking-wider">Producto</th>
+                  <th class="p-table-cell-padding text-label-bold font-label-bold text-on-surface-variant uppercase tracking-wider">Precio</th>
+                  <th class="p-table-cell-padding text-label-bold font-label-bold text-on-surface-variant uppercase tracking-wider">Estado</th>
+                  <th class="p-table-cell-padding text-label-bold font-label-bold text-on-surface-variant uppercase tracking-wider text-right">Acciones</th>
+                </tr>
+              </thead>
+              <tbody id="products-tbody" class="divide-y divide-outline-variant"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="bg-surface-container-lowest border border-outline-variant rounded-xl p-gutter shadow-sm col-span-1 md:col-span-2 mt-4">
+          <div class="flex items-center gap-3 mb-6 border-b border-outline-variant pb-3">
+            <span class="material-symbols-outlined text-on-surface-variant text-2xl">storefront</span>
+            <h3 class="text-headline-md font-headline-md text-on-surface">Datos de la empresa (cotizaciones)</h3>
+          </div>
+          <p class="text-body-sm font-body-sm text-on-surface-variant -mt-3 mb-4">Lo que sale impreso en el PDF de la pestaña "Cotizar": encabezado, datos de pago y políticas al pie.</p>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+            <div>
+              <label class="block text-label-bold font-label-bold uppercase tracking-wide text-on-surface-variant mb-1">Razón social</label>
+              <input id="qs-company-name" type="text" class="w-full p-2.5 border border-outline-variant rounded-md outline-none focus:border-outline focus:ring-2 focus:ring-outline/20" />
+            </div>
+            <div>
+              <label class="block text-label-bold font-label-bold uppercase tracking-wide text-on-surface-variant mb-1">NIT</label>
+              <input id="qs-company-nit" type="text" class="w-full p-2.5 border border-outline-variant rounded-md outline-none focus:border-outline focus:ring-2 focus:ring-outline/20" />
+            </div>
+            <div>
+              <label class="block text-label-bold font-label-bold uppercase tracking-wide text-on-surface-variant mb-1">Ciudad / dirección</label>
+              <input id="qs-company-address" type="text" class="w-full p-2.5 border border-outline-variant rounded-md outline-none focus:border-outline focus:ring-2 focus:ring-outline/20" />
+            </div>
+            <div>
+              <label class="block text-label-bold font-label-bold uppercase tracking-wide text-on-surface-variant mb-1">Teléfono</label>
+              <input id="qs-company-phone" type="text" class="w-full p-2.5 border border-outline-variant rounded-md outline-none focus:border-outline focus:ring-2 focus:ring-outline/20" />
+            </div>
+            <div class="md:col-span-2">
+              <label class="block text-label-bold font-label-bold uppercase tracking-wide text-on-surface-variant mb-1">Correo</label>
+              <input id="qs-company-email" type="text" class="w-full p-2.5 border border-outline-variant rounded-md outline-none focus:border-outline focus:ring-2 focus:ring-outline/20" />
+            </div>
+            <div class="md:col-span-2">
+              <label class="block text-label-bold font-label-bold uppercase tracking-wide text-on-surface-variant mb-1">Datos de pago (una línea por dato)</label>
+              <textarea id="qs-company-payment" rows="3" class="w-full p-2.5 border border-outline-variant rounded-md outline-none focus:border-outline focus:ring-2 focus:ring-outline/20"></textarea>
+            </div>
+            <div class="md:col-span-2">
+              <label class="block text-label-bold font-label-bold uppercase tracking-wide text-on-surface-variant mb-1">Políticas y condiciones (una por línea)</label>
+              <textarea id="qs-company-terms" rows="5" class="w-full p-2.5 border border-outline-variant rounded-md outline-none focus:border-outline focus:ring-2 focus:ring-outline/20"></textarea>
+            </div>
+          </div>
+          <div class="flex justify-end">
+            <button id="qs-company-save" class="px-4 py-2 rounded-lg bg-primary text-on-primary font-bold hover:bg-on-primary-fixed-variant">Guardar datos de la empresa</button>
+          </div>
+        </section>
+
+        <section class="bg-surface-container-lowest border border-outline-variant rounded-xl p-gutter shadow-sm col-span-1 md:col-span-2 mt-4">
+          <div class="flex items-center justify-between gap-3 mb-6 border-b border-outline-variant pb-3">
+            <div class="flex items-center gap-3">
               <span class="material-symbols-outlined text-on-surface-variant text-2xl">hub</span>
               <h3 class="text-headline-md font-headline-md text-on-surface">Conexión con Odoo</h3>
             </div>
@@ -176,7 +243,35 @@ export async function mount(container, ctx) {
     togglesEl.querySelector('#toggle-backup').addEventListener('change', (e) => {
       ctx.api.put('/api/settings', { auto_backup_weekly: e.target.checked }).catch((err) => ctx.toast(err.message, 'error'));
     });
+
+    container.querySelector('#qs-company-name').value = settings.quote_company_name || '';
+    container.querySelector('#qs-company-nit').value = settings.quote_company_nit || '';
+    container.querySelector('#qs-company-address').value = settings.quote_company_address || '';
+    container.querySelector('#qs-company-phone').value = settings.quote_company_phone || '';
+    container.querySelector('#qs-company-email').value = settings.quote_company_email || '';
+    container.querySelector('#qs-company-payment').value = settings.quote_payment_details || '';
+    container.querySelector('#qs-company-terms').value = settings.quote_terms || '';
   }
+
+  container.querySelector('#qs-company-save').addEventListener('click', async (e) => {
+    e.target.disabled = true;
+    try {
+      await ctx.api.put('/api/settings', {
+        quote_company_name: container.querySelector('#qs-company-name').value.trim(),
+        quote_company_nit: container.querySelector('#qs-company-nit').value.trim(),
+        quote_company_address: container.querySelector('#qs-company-address').value.trim(),
+        quote_company_phone: container.querySelector('#qs-company-phone').value.trim(),
+        quote_company_email: container.querySelector('#qs-company-email').value.trim(),
+        quote_payment_details: container.querySelector('#qs-company-payment').value,
+        quote_terms: container.querySelector('#qs-company-terms').value,
+      });
+      ctx.toast('Datos de la empresa actualizados', 'success');
+    } catch (err) {
+      ctx.toast(err.message, 'error');
+    } finally {
+      e.target.disabled = false;
+    }
+  });
 
   // --- Conexión con Odoo (solo lectura) ------------------------------
   const odooStatusEl = container.querySelector('#odoo-status');
@@ -212,7 +307,7 @@ export async function mount(container, ctx) {
         ${odooRow('Usuario', `${s.user || ''}${s.login ? ` (${s.login})` : ''}`)}
       </div>
       <div id="odoo-stages" class="mt-3"></div>
-      <p class="mt-3 text-[11px] text-on-surface-variant">El CRM revisa Odoo cada ~30&nbsp;s y <strong>avanza</strong> el lead cuando la oportunidad pasa a Contactado, Cotizado o Perdido en Odoo. Retroceder una tarjeta en Odoo no retrocede el CRM; "Ganado" se cierra desde el CRM.</p>`;
+      <p class="mt-3 text-[11px] text-on-surface-variant">El CRM revisa Odoo cada ~30&nbsp;s y <strong>refleja</strong> el estado del lead (Asignado, Contactado, Cotizado) en cualquier dirección, igual que quede la tarjeta en Odoo, y lo cierra si queda Perdido. Si el asesor arma la cotización directo en Odoo, se enlaza sola al lead (referencia, monto y estado Cotizado) y aparece en Cotizaciones. Un lead ya cerrado en el CRM no se reabre desde Odoo; "Ganado" siempre se cierra desde el CRM.</p>`;
     loadOdooStages();
   }
 
@@ -456,5 +551,151 @@ export async function mount(container, ctx) {
     });
   });
 
-  await Promise.all([load(), loadUsers(), loadOdoo()]);
+  // --- Lista de precios (Cotizar) --------------------------------------
+  const productsTbody = container.querySelector('#products-tbody');
+  let productsCache = [];
+
+  function productRowHtml(p) {
+    return `
+      <tr class="${p.active ? '' : 'opacity-60'}">
+        <td class="p-table-cell-padding font-semibold text-on-surface">
+          <input data-product="${p.id}" data-field="name" data-original="${escapeHtml(p.name)}" value="${escapeHtml(p.name)}" class="product-field-input w-full bg-transparent border border-transparent hover:border-outline-variant focus:border-outline rounded-md px-1.5 py-1 outline-none focus:ring-2 focus:ring-outline/20" />
+        </td>
+        <td class="p-table-cell-padding">
+          <input data-product="${p.id}" data-field="price" data-original="${p.price}" type="number" min="0" step="1000" value="${p.price}" class="product-field-input w-32 bg-transparent border border-transparent hover:border-outline-variant focus:border-outline rounded-md px-1.5 py-1 outline-none focus:ring-2 focus:ring-outline/20" />
+        </td>
+        <td class="p-table-cell-padding">
+          <span class="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold ${p.active ? 'bg-secondary-container text-on-secondary-container' : 'bg-surface-container-high text-on-surface-variant'}">
+            ${p.active ? 'Activo' : 'Descontinuado'}
+          </span>
+        </td>
+        <td class="p-table-cell-padding text-right">
+          <div class="flex justify-end gap-2">
+            <button data-action="edit-description" data-id="${p.id}" title="${p.description ? 'Editar descripción' : 'Agregar descripción'}" class="p-1.5 rounded border border-outline-variant ${p.description ? 'text-secondary' : 'text-on-surface-variant'} hover:bg-surface-container-low transition-colors">
+              <span class="material-symbols-outlined text-[16px]">${p.description ? 'description' : 'note_add'}</span>
+            </button>
+            <button data-action="toggle-product" data-id="${p.id}" data-active="${p.active ? '1' : '0'}" class="px-3 py-1 border border-outline-variant rounded text-body-sm font-label-bold ${p.active ? 'text-error hover:bg-error-container/20' : 'text-secondary hover:bg-secondary-container/20'} transition-colors">${p.active ? 'Descontinuar' : 'Reactivar'}</button>
+          </div>
+        </td>
+      </tr>
+    `;
+  }
+
+  async function loadProducts() {
+    try {
+      productsCache = await ctx.api.get('/api/products?all=1');
+      productsTbody.innerHTML = productsCache.length
+        ? productsCache.map(productRowHtml).join('')
+        : `<tr><td colspan="4" class="p-table-cell-padding py-6 text-center text-body-sm text-on-surface-variant">Sin productos en la lista de precios.</td></tr>`;
+    } catch (err) {
+      ctx.toast(err.message || 'No se pudo cargar la lista de precios', 'error');
+    }
+  }
+
+  function openProductDescriptionModal(product) {
+    openModal({
+      title: `Descripción · ${product.name}`,
+      render: (body, { close }) => {
+        body.innerHTML = `
+          <p class="text-[11px] text-on-surface-variant mb-2">Se copia como valor por defecto a la línea cuando se elige este producto en una cotización -- el asesor la puede editar o borrar ahí sin afectar esta ficha.</p>
+          <textarea id="pd-desc" rows="4" class="w-full p-2.5 border border-outline-variant rounded-md mb-4 outline-none focus:border-outline focus:ring-2 focus:ring-outline/20">${escapeHtml(product.description || '')}</textarea>
+          <div class="flex justify-end gap-2">
+            <button id="pd-cancel" class="px-4 py-2 rounded-lg border border-outline-variant hover:bg-surface-container-low">Cancelar</button>
+            <button id="pd-ok" class="px-4 py-2 rounded-lg bg-primary text-on-primary font-bold hover:bg-on-primary-fixed-variant">Guardar</button>
+          </div>
+        `;
+        body.querySelector('#pd-cancel').addEventListener('click', close);
+        body.querySelector('#pd-ok').addEventListener('click', async () => {
+          try {
+            await ctx.api.patch(`/api/products/${product.id}`, { description: body.querySelector('#pd-desc').value });
+            ctx.toast('Descripción actualizada', 'success');
+            close();
+            loadProducts();
+          } catch (err) {
+            ctx.toast(err.message, 'error');
+          }
+        });
+      },
+    });
+  }
+
+  productsTbody.addEventListener('change', async (e) => {
+    const input = e.target.closest('.product-field-input');
+    if (!input) return;
+    const field = input.dataset.field;
+    const newVal = field === 'price' ? String(Number(input.value) || 0) : input.value.trim();
+    if (field === 'name' && !newVal) {
+      input.value = input.dataset.original;
+      return;
+    }
+    if (newVal === input.dataset.original) return;
+    try {
+      await ctx.api.patch(`/api/products/${input.dataset.product}`, { [field]: field === 'price' ? Number(newVal) : newVal });
+      ctx.toast('Producto actualizado', 'success');
+      loadProducts();
+    } catch (err) {
+      ctx.toast(err.message, 'error');
+      loadProducts();
+    }
+  });
+
+  productsTbody.addEventListener('click', async (e) => {
+    const toggleBtn = e.target.closest('button[data-action="toggle-product"]');
+    if (toggleBtn) {
+      const active = toggleBtn.dataset.active === '1';
+      try {
+        await ctx.api.patch(`/api/products/${toggleBtn.dataset.id}`, { active: !active });
+        ctx.toast(active ? 'Producto descontinuado' : 'Producto reactivado', 'success');
+        loadProducts();
+      } catch (err) {
+        ctx.toast(err.message, 'error');
+      }
+      return;
+    }
+    const descBtn = e.target.closest('button[data-action="edit-description"]');
+    if (descBtn) {
+      const product = productsCache.find((p) => p.id === Number(descBtn.dataset.id));
+      if (product) openProductDescriptionModal(product);
+    }
+  });
+
+  container.querySelector('#add-product-btn').addEventListener('click', () => {
+    openModal({
+      title: 'Nuevo producto',
+      render: (body, { close }) => {
+        body.innerHTML = `
+          <label class="block text-label-bold font-label-bold uppercase tracking-wide text-on-surface-variant mb-1">Nombre *</label>
+          <input id="new-product-name" type="text" class="w-full p-2.5 border border-outline-variant rounded-md mb-4 outline-none focus:border-outline focus:ring-2 focus:ring-outline/20" />
+          <label class="block text-label-bold font-label-bold uppercase tracking-wide text-on-surface-variant mb-1">Precio (COP)</label>
+          <input id="new-product-price" type="number" min="0" step="1000" value="0" class="w-full p-2.5 border border-outline-variant rounded-md mb-4 outline-none focus:border-outline focus:ring-2 focus:ring-outline/20" />
+          <label class="block text-label-bold font-label-bold uppercase tracking-wide text-on-surface-variant mb-1">Descripción (opcional)</label>
+          <textarea id="new-product-desc" rows="2" class="w-full p-2.5 border border-outline-variant rounded-md mb-4 outline-none focus:border-outline focus:ring-2 focus:ring-outline/20"></textarea>
+          <div class="flex justify-end gap-2">
+            <button id="new-product-cancel" class="px-4 py-2 rounded-lg border border-outline-variant hover:bg-surface-container-low">Cancelar</button>
+            <button id="new-product-ok" class="px-4 py-2 rounded-lg bg-primary text-on-primary font-bold hover:bg-on-primary-fixed-variant">Crear</button>
+          </div>
+        `;
+        body.querySelector('#new-product-cancel').addEventListener('click', close);
+        body.querySelector('#new-product-ok').addEventListener('click', async () => {
+          const name = body.querySelector('#new-product-name').value.trim();
+          const price = Number(body.querySelector('#new-product-price').value) || 0;
+          const description = body.querySelector('#new-product-desc').value.trim();
+          if (!name) {
+            ctx.toast('El nombre es obligatorio', 'error');
+            return;
+          }
+          try {
+            await ctx.api.post('/api/products', { name, price, description });
+            ctx.toast('Producto creado', 'success');
+            close();
+            loadProducts();
+          } catch (err) {
+            ctx.toast(err.message, 'error');
+          }
+        });
+      },
+    });
+  });
+
+  await Promise.all([load(), loadUsers(), loadOdoo(), loadProducts()]);
 }

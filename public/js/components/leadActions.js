@@ -30,7 +30,7 @@ function sqlUtcToColombiaInputValue(sqlDatetime) {
   return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}T${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
 }
 
-function dateFieldHtml(id, label = 'Fecha y hora real', initialValue = null) {
+export function dateFieldHtml(id, label = 'Fecha y hora real', initialValue = null) {
   return `
     <label class="block text-label-bold font-label-bold uppercase tracking-wide text-on-surface-variant mb-1">${label}</label>
     <input id="${id}" type="datetime-local" value="${initialValue || nowLocalInputValue()}" class="w-full p-2.5 border border-outline-variant rounded-md mb-4 outline-none focus:border-outline focus:ring-2 focus:ring-outline/20" />
@@ -386,7 +386,8 @@ function renderQuotationResult(body, lead, quotation, ctx, { close, onDone }) {
   });
   body.querySelector('[data-confirm]')?.addEventListener('click', () => {
     close();
-    openCloseModal({ ...lead, odoo_order_id: quotation.id, sale_reference: quotation.name, amount: quotation.amount_total }, ctx, onDone);
+    // Sin IVA: el monto que se reporta en el CRM es el subtotal, no el total con impuestos.
+    openCloseModal({ ...lead, odoo_order_id: quotation.id, sale_reference: quotation.name, amount: quotation.amount_untaxed }, ctx, onDone);
   });
 }
 
@@ -506,7 +507,8 @@ export async function openQuotationViewModal(lead, ctx, onDone) {
         });
         body.querySelector('[data-confirm]')?.addEventListener('click', () => {
           close();
-          openCloseModal({ ...lead, odoo_order_id: q.id, sale_reference: q.name, amount: q.amount_total }, ctx, onDone);
+          // Sin IVA: el monto que se reporta en el CRM es el subtotal, no el total con impuestos.
+          openCloseModal({ ...lead, odoo_order_id: q.id, sale_reference: q.name, amount: q.amount_untaxed }, ctx, onDone);
         });
         body.querySelector('[data-edit]')?.addEventListener('click', () => {
           const initial = q.lines.map((l) => ({
@@ -590,7 +592,7 @@ export function openCloseModal(lead, ctx, onDone) {
           <input id="close-amount" type="number" min="0" step="1000" placeholder="0" value="${lead.odoo_order_id && lead.amount ? Math.round(lead.amount) : ''}" class="w-full p-2.5 border border-outline-variant rounded-md mb-2 outline-none focus:border-outline focus:ring-2 focus:ring-outline/20" />
           ${
             lead.odoo_order_id
-              ? `<p class="text-[11px] text-on-surface-variant mb-4 flex items-start gap-1"><span class="material-symbols-outlined text-[13px]">info</span>Se confirmará la cotización ${escapeHtml(lead.sale_reference || '')} como Pedido de venta en Odoo. El total del pedido confirmado será el monto final.</p>`
+              ? `<p class="text-[11px] text-on-surface-variant mb-4 flex items-start gap-1"><span class="material-symbols-outlined text-[13px]">info</span>Se confirmará la cotización ${escapeHtml(lead.sale_reference || '')} como Pedido de venta en Odoo. El monto de la venta en el CRM (sin IVA) es el que registres aquí.</p>`
               : '<div class="mb-4"></div>'
           }
         </div>
@@ -690,7 +692,11 @@ export function openEditLeadModal(lead, ctx, onDone) {
           </div>
           <div>
             <label class="block text-label-bold font-label-bold uppercase tracking-wide text-on-surface-variant mb-1">Referencia de venta</label>
-            <input id="edit-referencia" type="text" value="${escapeHtml(lead.sale_reference || '')}" placeholder="Ej. S02224" class="w-full p-2.5 border border-outline-variant rounded-md outline-none focus:border-outline focus:ring-2 focus:ring-outline/20" />
+            <input id="edit-referencia" type="text" value="${escapeHtml(lead.sale_reference || '')}" placeholder="Ej. S02224" class="w-full p-2.5 border border-outline-variant rounded-md outline-none focus:border-outline focus:ring-2 focus:ring-outline/20 mb-1.5" />
+            <div class="flex items-center gap-1.5">
+              <button type="button" id="ref-toggle-odoo" class="px-2 py-1 rounded-full text-[11px] font-bold border transition-colors">Odoo (S0...)</button>
+              <button type="button" id="ref-toggle-ped" class="px-2 py-1 rounded-full text-[11px] font-bold border transition-colors">PED (pagado)</button>
+            </div>
           </div>
         </div>
         ${dateFieldHtml('edit-fecha-registro', 'Fecha y hora de registro del lead', sqlUtcToColombiaInputValue(lead.created_at))}
@@ -713,6 +719,39 @@ export function openEditLeadModal(lead, ctx, onDone) {
       productoSelect.addEventListener('change', () => {
         productoOtro.classList.toggle('hidden', productoSelect.value !== 'Otro');
       });
+
+      // Atajo Odoo/PED: en vez de retipear la referencia completa, un click
+      // pasa de la cotizacion de Odoo (S0...) a PED (facturado/pagado) o
+      // viceversa, conservando el numero. El input sigue siendo texto libre
+      // por si la referencia real no calza con ninguno de los dos formatos.
+      const refInput = body.querySelector('#edit-referencia');
+      const refOdooBtn = body.querySelector('#ref-toggle-odoo');
+      const refPedBtn = body.querySelector('#ref-toggle-ped');
+      const REF_BTN_BASE = 'px-2 py-1 rounded-full text-[11px] font-bold border transition-colors';
+      const REF_BTN_OFF = 'border-outline-variant text-on-surface-variant hover:bg-surface-container-low';
+      function refDigits(value) {
+        return (value || '').match(/\d+/)?.[0] || '';
+      }
+      function paintRefToggle() {
+        // Mismo criterio de color que el badge de Ventas Cerradas (ver saleReferenceBadge).
+        const isPed = /^PED/i.test((refInput.value || '').trim());
+        const hasValue = !!(refInput.value || '').trim();
+        refOdooBtn.className = `${REF_BTN_BASE} ${hasValue && !isPed ? 'border-tertiary bg-tertiary-container text-on-tertiary-container' : REF_BTN_OFF}`;
+        refPedBtn.className = `${REF_BTN_BASE} ${hasValue && isPed ? 'border-secondary bg-secondary-container text-on-secondary-container' : REF_BTN_OFF}`;
+      }
+      refOdooBtn.addEventListener('click', () => {
+        const digits = refDigits(refInput.value);
+        refInput.value = `S0${digits}`;
+        paintRefToggle();
+      });
+      refPedBtn.addEventListener('click', () => {
+        const digits = refDigits(refInput.value);
+        refInput.value = `PED ${digits}`.trim();
+        paintRefToggle();
+      });
+      refInput.addEventListener('input', paintRefToggle);
+      paintRefToggle();
+
       body.querySelector('#edit-cancel').addEventListener('click', close);
       body.querySelector('#edit-ok').addEventListener('click', async () => {
         const client_name = body.querySelector('#edit-nombre').value.trim();
@@ -761,6 +800,28 @@ export function openEditLeadModal(lead, ctx, onDone) {
       });
     },
   });
+}
+
+// Elimina un lead por completo (registro de prueba, duplicado, error de
+// captura). Distinto a "Cerrar como perdido": esto borra el registro, no
+// solo lo cierra -- por eso pide confirmación explícita y no se puede
+// deshacer desde la UI.
+export async function deleteLead(lead, ctx, onDone) {
+  const ok = await confirmModal({
+    title: `Eliminar lead · ${escapeHtml(lead.client_name)}`,
+    message: 'Esto borra el lead por completo (datos, abonos, historial de reasignaciones) y, si tenía oportunidad en Odoo, la archiva allá también. No se puede deshacer.',
+    confirmLabel: 'Eliminar',
+    danger: true,
+  });
+  if (!ok) return;
+  try {
+    const result = await ctx.api.del(`/api/leads/${lead.id}`);
+    ctx.toast('Lead eliminado', 'success');
+    if (result && result.odoo_warning) ctx.toast(result.odoo_warning, 'error');
+    onDone?.();
+  } catch (err) {
+    ctx.toast(err.message, 'error');
+  }
 }
 
 export async function confirmFactoryReset(ctx) {

@@ -1,5 +1,5 @@
-import { escapeHtml, formatMoney, statusBadge, copyNameBtn, bindCopyButtons, canReassignLead } from '../utils.js';
-import { openReassignModal, openCloseModal, openEditLeadModal, markContacted, openQuotationModal, openQuotationViewModal } from './leadActions.js';
+import { escapeHtml, formatMoney, statusBadge, copyNameBtn, bindCopyButtons, canReassignLead, saleReferenceBadge } from '../utils.js';
+import { openReassignModal, openCloseModal, openEditLeadModal, markContacted, markQuoted, openQuotationViewModal, deleteLead } from './leadActions.js';
 
 // Tablero por estado del embudo -- vista alterna a la tabla de Ventas, mismos
 // datos (GET /api/leads ya filtrado) y mismas acciones que ya existen en
@@ -18,10 +18,18 @@ const COLUMNS = [
 // lateral.
 const CERRADO_COLLAPSED_KEY = 'nova_kanban_cerrado_collapsed';
 
-function cardHtml(lead, ctx) {
+function cardHtml(lead, ctx, opts = {}) {
   const closed = lead.status.startsWith('cerrado');
   const isPrivileged = ctx.user?.role !== 'asesor';
   const badge = statusBadge(lead.status);
+  // Aviso de "sin Odoo": solo si la integracion esta prendida (si no, TODAS
+  // las tarjetas darian esto y no significaria nada) y el lead sigue
+  // abierto -- uno ya cerrado sin oportunidad no es urgente de revisar.
+  const showUnsynced = opts.odooEnabled && !closed && !lead.odoo_lead_id;
+  const odooLink =
+    lead.odoo_lead_id && opts.odooUrl
+      ? `<a href="${opts.odooUrl}/web#id=${lead.odoo_lead_id}&model=crm.lead&view_type=form" target="_blank" rel="noopener" class="px-2 py-1 border border-outline-variant text-on-surface-variant rounded text-[11px] font-label-bold hover:bg-surface-container-low transition-colors inline-flex items-center gap-1 whitespace-nowrap"><span class="material-symbols-outlined text-[13px]">open_in_new</span>Ver en Odoo</a>`
+      : '';
 
   // Igual criterio que la tabla de Ventas (ver ventas.js): acciones de
   // embudo y enlaces secundarios en dos filas separadas, no una sola bolsa
@@ -34,16 +42,12 @@ function cardHtml(lead, ctx) {
       primary.push(`<button data-action="contact" data-id="${lead.id}" class="px-2 py-1 bg-tertiary-fixed text-on-tertiary-fixed-variant rounded text-[11px] font-label-bold hover:opacity-90 transition-colors whitespace-nowrap">Contactar</button>`);
     }
     if (lead.status === 'asignado' || lead.status === 'contactado') {
-      primary.push(`<button data-action="quote" data-id="${lead.id}" class="px-2 py-1 bg-primary-fixed text-on-primary-fixed-variant rounded text-[11px] font-label-bold hover:opacity-90 transition-colors whitespace-nowrap">Cotizar</button>`);
+      primary.push(`<button data-action="mark-quote" data-id="${lead.id}" class="px-2 py-1 bg-primary-fixed text-on-primary-fixed-variant rounded text-[11px] font-label-bold hover:opacity-90 transition-colors whitespace-nowrap">Marcar cotizado</button>`);
     }
-    // Lead ya cotizado: si tiene sale.order en Odoo, "Ver cotización" (ver/
-    // editar/enviar/confirmar); si se marcó cotizado sin Odoo, ofrecer armarla.
-    if (lead.status === 'cotizado') {
-      primary.push(
-        lead.odoo_order_id
-          ? `<button data-action="view-quote" data-id="${lead.id}" class="px-2 py-1 bg-primary-fixed text-on-primary-fixed-variant rounded text-[11px] font-label-bold hover:opacity-90 transition-colors whitespace-nowrap">Ver cotización</button>`
-          : `<button data-action="quote" data-id="${lead.id}" class="px-2 py-1 border border-outline-variant text-on-surface-variant rounded text-[11px] font-label-bold hover:bg-surface-container-low transition-colors whitespace-nowrap">Cotizar en Odoo</button>`
-      );
+    // Lead ya cotizado con sale.order en Odoo: "Ver cotización" (ver/editar/
+    // enviar/confirmar). Sin Odoo ya no se ofrece armarla desde aquí.
+    if (lead.status === 'cotizado' && lead.odoo_order_id) {
+      primary.push(`<button data-action="view-quote" data-id="${lead.id}" class="px-2 py-1 bg-primary-fixed text-on-primary-fixed-variant rounded text-[11px] font-label-bold hover:opacity-90 transition-colors whitespace-nowrap">Ver cotización</button>`);
     }
     primary.push(`<button data-action="close" data-id="${lead.id}" class="px-2 py-1 bg-secondary text-on-secondary rounded text-[11px] font-label-bold hover:opacity-90 transition-colors whitespace-nowrap">Cerrar</button>`);
     // Un asesor tambien puede reasignar, pero solo un lead propio que ya
@@ -56,23 +60,32 @@ function cardHtml(lead, ctx) {
     // suyo -- una vez cerrado, la edicion completa (incluye monto/fecha de
     // cierre) sigue siendo solo de coordinador/admin (rama `else` de abajo).
     secondary.push(`<button data-action="edit" data-id="${lead.id}" class="px-2 py-1 border border-outline-variant text-on-surface-variant rounded text-[11px] font-label-bold hover:bg-surface-container-low transition-colors inline-flex items-center gap-1 whitespace-nowrap"><span class="material-symbols-outlined text-[13px]">edit</span>Editar</button>`);
+    if (odooLink) secondary.push(odooLink);
+    if (isPrivileged) {
+      secondary.push(`<button data-action="delete" data-id="${lead.id}" class="px-2 py-1 border border-error/40 text-error rounded text-[11px] font-label-bold hover:bg-error/10 transition-colors inline-flex items-center gap-1 whitespace-nowrap"><span class="material-symbols-outlined text-[13px]">delete</span>Eliminar</button>`);
+    }
   } else if (isPrivileged) {
     if (lead.odoo_order_id) {
       secondary.push(`<button data-action="view-quote" data-id="${lead.id}" class="px-2 py-1 border border-outline-variant text-on-surface-variant rounded text-[11px] font-label-bold hover:bg-surface-container-low transition-colors inline-flex items-center gap-1 whitespace-nowrap"><span class="material-symbols-outlined text-[13px]">request_quote</span>Ver cotización</button>`);
     }
     secondary.push(`<button data-action="edit" data-id="${lead.id}" class="px-2 py-1 border border-outline-variant text-on-surface-variant rounded text-[11px] font-label-bold hover:bg-surface-container-low transition-colors inline-flex items-center gap-1 whitespace-nowrap"><span class="material-symbols-outlined text-[13px]">edit</span>Editar</button>`);
+    if (odooLink) secondary.push(odooLink);
+    secondary.push(`<button data-action="delete" data-id="${lead.id}" class="px-2 py-1 border border-error/40 text-error rounded text-[11px] font-label-bold hover:bg-error/10 transition-colors inline-flex items-center gap-1 whitespace-nowrap"><span class="material-symbols-outlined text-[13px]">delete</span>Eliminar</button>`);
   }
   return `
     <div class="lead-card bg-surface-container-lowest border border-outline-variant rounded-lg p-3 shadow-sm space-y-1.5">
       <div class="flex items-start justify-between gap-2">
         <p class="text-body-sm font-bold text-on-surface truncate flex items-center gap-1 min-w-0">${escapeHtml(lead.client_name)}${copyNameBtn(lead.client_name)}</p>
-        <span class="shrink-0 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold whitespace-nowrap ${badge.badgeClass}">${badge.label}</span>
+        <span class="shrink-0 flex items-center gap-1">
+          ${showUnsynced ? `<span title="Sin oportunidad en Odoo" class="material-symbols-outlined text-[14px] text-error">cloud_off</span>` : ''}
+          <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold whitespace-nowrap ${badge.badgeClass}">${badge.label}</span>
+        </span>
       </div>
       <p class="text-[11px] text-on-surface-variant truncate">${escapeHtml(lead.product || '—')}${lead.city ? ` · ${escapeHtml(lead.city)}` : ''}</p>
       <p class="text-[11px] text-on-surface-variant truncate flex items-center gap-1">
         <span class="material-symbols-outlined text-[13px]">person</span>${escapeHtml(lead.advisor_name || 'Sin asignar')}
       </p>
-      ${lead.odoo_order_id && lead.sale_reference ? `<p class="text-[11px] text-on-surface-variant truncate flex items-center gap-1"><span class="material-symbols-outlined text-[13px]">request_quote</span>${escapeHtml(lead.sale_reference)}</p>` : ''}
+      ${lead.odoo_order_id && lead.sale_reference ? `<p class="text-[11px] truncate flex items-center gap-1"><span class="material-symbols-outlined text-[13px] text-on-surface-variant">request_quote</span><span class="inline-flex px-1.5 py-0.5 rounded-full font-mono font-bold ${saleReferenceBadge(lead.sale_reference).badgeClass}">${escapeHtml(lead.sale_reference)}</span></p>` : ''}
       ${closed && lead.amount ? `<p class="text-body-sm font-bold text-on-surface">${formatMoney(lead.amount)}</p>` : ''}
       ${primary.length ? `<div class="flex flex-wrap gap-1 pt-1">${primary.join('')}</div>` : ''}
       ${secondary.length ? `<div class="flex flex-wrap gap-1">${secondary.join('')}</div>` : ''}
@@ -85,7 +98,7 @@ function cardHtml(lead, ctx) {
  * filtros que la tabla de Ventas); `onDone` se llama tras cualquier accion
  * que mute un lead, para recargar los datos igual que hace la tabla.
  */
-export function renderLeadKanban(root, leads, ctx, onDone) {
+export function renderLeadKanban(root, leads, ctx, onDone, opts = {}) {
   const cerradoCollapsed = localStorage.getItem(CERRADO_COLLAPSED_KEY) === '1';
 
   root.innerHTML = `
@@ -116,7 +129,7 @@ export function renderLeadKanban(root, leads, ctx, onDone) {
             </div>
           </div>
           <div class="p-2.5 space-y-2.5 flex-1 overflow-y-auto max-h-[560px]">
-            ${items.length ? items.map((l) => cardHtml(l, ctx)).join('') : '<p class="text-[11px] text-on-surface-variant text-center py-6">Sin leads aquí</p>'}
+            ${items.length ? items.map((l) => cardHtml(l, ctx, opts)).join('') : '<p class="text-[11px] text-on-surface-variant text-center py-6">Sin leads aquí</p>'}
           </div>
         </div>`;
       }).join('')}
@@ -125,7 +138,7 @@ export function renderLeadKanban(root, leads, ctx, onDone) {
 
   root.querySelector('[data-toggle-cerrado]')?.addEventListener('click', () => {
     localStorage.setItem(CERRADO_COLLAPSED_KEY, cerradoCollapsed ? '0' : '1');
-    renderLeadKanban(root, leads, ctx, onDone);
+    renderLeadKanban(root, leads, ctx, onDone, opts);
   });
 
   bindCopyButtons(root, ctx);
@@ -136,9 +149,10 @@ export function renderLeadKanban(root, leads, ctx, onDone) {
       if (btn.dataset.action === 'reassign') openReassignModal(lead, ctx, onDone);
       if (btn.dataset.action === 'close') openCloseModal(lead, ctx, onDone);
       if (btn.dataset.action === 'contact') markContacted(lead, ctx, onDone);
-      if (btn.dataset.action === 'quote') openQuotationModal(lead, ctx, onDone);
+      if (btn.dataset.action === 'mark-quote') markQuoted(lead, ctx, onDone);
       if (btn.dataset.action === 'view-quote') openQuotationViewModal(lead, ctx, onDone);
       if (btn.dataset.action === 'edit') openEditLeadModal(lead, ctx, onDone);
+      if (btn.dataset.action === 'delete') deleteLead(lead, ctx, onDone);
     });
   });
 }

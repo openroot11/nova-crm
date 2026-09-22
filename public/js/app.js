@@ -9,12 +9,12 @@ const user = getCurrentUser();
 // dia (Ventas/SLA); coordinador suma reportes y equipo; admin ve todo,
 // incluyendo Ajustes (que ademas el backend ya protege con requireRole).
 const ROUTES_BY_ROLE = {
-  admin: ['dashboard', 'ventas', 'sla', 'seguimiento', 'cotizaciones', 'clientes', 'informe', 'ventas-cerradas', 'estadisticas', 'asesores', 'ajustes'],
-  coordinador: ['dashboard', 'ventas', 'sla', 'seguimiento', 'cotizaciones', 'clientes', 'informe', 'ventas-cerradas', 'estadisticas', 'asesores'],
+  admin: ['dashboard1', 'dashboard', 'ventas', 'seguimiento', 'cotizaciones', 'cotizar', 'clientes', 'informe', 'ventas-cerradas', 'estadisticas', 'reporte', 'asesores', 'ajustes'],
+  coordinador: ['dashboard1', 'dashboard', 'ventas', 'seguimiento', 'cotizaciones', 'cotizar', 'clientes', 'informe', 'ventas-cerradas', 'estadisticas', 'asesores'],
   // Seguimiento (cotizaciones sin respuesta del cliente) es seguimiento de
   // EQUIPO, no del dia a dia de un asesor sobre lo suyo -- se le quito del
-  // menu para no duplicar la misma alerta que ya ve en Ventas/SLA.
-  asesor: ['ventas', 'sla', 'cotizaciones', 'clientes'],
+  // menu para no duplicar la misma alerta que ya ve en Ventas.
+  asesor: ['ventas', 'cotizaciones', 'cotizar', 'clientes'],
 };
 const allowedRoutes = ROUTES_BY_ROLE[user?.role] || ROUTES_BY_ROLE.asesor;
 // El Dashboard resume datos de todo el equipo (los mismos endpoints de
@@ -67,29 +67,33 @@ sidebarToggleBtn.addEventListener('click', () => {
 });
 
 const routes = {
+  dashboard1: () => import('./views/dashboard1.js'),
   dashboard: () => import('./views/dashboard.js'),
   ventas: () => import('./views/ventas.js'),
-  sla: () => import('./views/sla.js'),
   seguimiento: () => import('./views/seguimiento.js'),
   cotizaciones: () => import('./views/cotizaciones.js'),
+  cotizar: () => import('./views/cotizar.js'),
   clientes: () => import('./views/clientes.js'),
   informe: () => import('./views/informe.js'),
   'ventas-cerradas': () => import('./views/ventasCerradas.js'),
   estadisticas: () => import('./views/estadisticas.js'),
+  reporte: () => import('./views/reporte.js'),
   asesores: () => import('./views/asesores.js'),
   ajustes: () => import('./views/ajustes.js'),
 };
 
 const titles = {
-  dashboard: 'Dashboard',
+  dashboard1: 'Dashboard 1',
+  dashboard: 'Dashboard 2',
   ventas: 'Registro Operativo',
-  sla: 'Control SLA 24h',
   seguimiento: 'Seguimiento Activo',
   cotizaciones: 'Cotizaciones y Ventas',
+  cotizar: 'Cotizar',
   clientes: 'Clientes',
   informe: 'Informe Diario',
   'ventas-cerradas': 'Ventas Cerradas',
   estadisticas: 'Rendimiento Comercial',
+  reporte: 'Reporte de Servicio al Cliente',
   asesores: 'Gestión del Equipo',
   ajustes: 'Configuración y Exportación',
 };
@@ -190,19 +194,10 @@ ws.on('__status', (status) => {
   }
 });
 
-// Badge global de leads criticos (SLA > 24h)
-const slaBtn = document.getElementById('sla-badge-btn');
-const slaCount = document.getElementById('sla-badge-count');
-async function refreshSlaBadge() {
-  try {
-    const kpis = await api.get('/api/kpis');
-    slaBtn.classList.toggle('hidden', kpis.critical_leads_count <= 0);
-    slaCount.textContent = kpis.critical_leads_count;
-  } catch {
-    /* si falla, se reintenta en el siguiente ciclo */
+// Aviso en vivo cuando entra un lead nuevo (lo cree quien lo cree), para
+// quien tenga el CRM abierto en cualquier vista -- no solo en Ventas.
+ws.on('leads_changed', (payload) => {
+  if (payload && payload.reason === 'created' && payload.client_name) {
+    toast(`Nuevo lead: ${payload.client_name}${payload.advisor_name ? ' · ' + payload.advisor_name : ''}`, 'info');
   }
-}
-slaBtn.addEventListener('click', () => ctx.navigate('sla'));
-ws.on('leads_changed', refreshSlaBadge);
-refreshSlaBadge();
-setInterval(refreshSlaBadge, 60000);
+});

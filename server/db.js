@@ -200,6 +200,57 @@ CREATE TABLE IF NOT EXISTS payments (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Lista de precios propia del CRM (pestaña "Cotizar"): a diferencia del
+-- catálogo de productos de Odoo, esta vive 100% en Nova y no depende de esa
+-- integración -- la idea es que, cuando el negocio deje de usar Odoo en
+-- conjunto con el CRM, cotizar siga funcionando igual. "active=0" = producto
+-- descontinuado (no aparece en el buscador de nuevas líneas, pero se
+-- conserva para no romper cotizaciones viejas que ya lo referencian).
+CREATE TABLE IF NOT EXISTS products (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  price REAL NOT NULL DEFAULT 0,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Cotizaciones nativas del CRM (pestaña "Cotizar"), independientes de Odoo.
+-- "number" es el consecutivo mostrado (COT-0001...), armado a partir del id
+-- tras el INSERT. "state" imita las mismas 4 etapas que ya se usaban con
+-- Odoo (draft/sent/sale/cancel) para no rediseñar la barra de estado de la
+-- pantalla -- pero aquí nada de esto toca sale.order.
+CREATE TABLE IF NOT EXISTS quotations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  lead_id INTEGER NOT NULL REFERENCES leads(id),
+  -- NULL brevemente entre el INSERT y el UPDATE que le pone el consecutivo
+  -- (necesita el id, que solo se conoce tras insertar) -- UNIQUE en SQLite
+  -- no choca entre varios NULL, asi que no hace falta un valor de relleno.
+  number TEXT UNIQUE,
+  state TEXT NOT NULL DEFAULT 'draft' CHECK (state IN ('draft', 'sent', 'sale', 'cancel')),
+  note TEXT,
+  validity_days INTEGER NOT NULL DEFAULT 8,
+  date_order TEXT NOT NULL DEFAULT (datetime('now')),
+  validity_date TEXT,
+  amount_untaxed REAL NOT NULL DEFAULT 0,
+  amount_tax REAL NOT NULL DEFAULT 0,
+  amount_total REAL NOT NULL DEFAULT 0,
+  created_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS quotation_lines (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  quotation_id INTEGER NOT NULL REFERENCES quotations(id),
+  product_id INTEGER REFERENCES products(id),
+  product_name TEXT NOT NULL,
+  qty REAL NOT NULL DEFAULT 1,
+  price_unit REAL NOT NULL DEFAULT 0,
+  subtotal REAL NOT NULL DEFAULT 0,
+  position INTEGER NOT NULL DEFAULT 0
+);
+
 -- Todo lo que NO sea Google Ads queda fuera de las vistas operativas/
 -- agregadas del programa (Ventas, SLA, Seguimiento, Estadisticas, Dashboard,
 -- Informe, Asesores) a peticion del negocio -- hoy coincide 100% con el lote
@@ -238,6 +289,78 @@ function ensureColumn(table, column, definition) {
   }
 }
 
+// El CHECK de una columna no se puede alterar con ALTER TABLE: para ampliar
+// los tipos de reporte permitidos (se agrego 'mensual', el reporte de
+// gerencia) hay que reconstruir la tabla. Procedimiento oficial de SQLite
+// para redefinir una tabla (foreign_keys OFF + transaccion + rename).
+function ensureReportsTypeCheck() {
+  const row = conn.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'reports'").get();
+  if (!row || row.sql.includes("'mensual'")) return;
+
+  exec('PRAGMA foreign_keys = OFF');
+  exec('BEGIN');
+  try {
+    exec(`
+      CREATE TABLE reports_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        type TEXT NOT NULL CHECK (type IN ('rendimiento', 'rentabilidad', 'asesor', 'mensual')),
+        period_from TEXT NOT NULL,
+        period_to TEXT NOT NULL,
+        advisor_id INTEGER REFERENCES advisors(id),
+        generated_by INTEGER REFERENCES users(id),
+        generated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        data TEXT NOT NULL
+      );
+    `);
+    exec(
+      'INSERT INTO reports_new (id, type, period_from, period_to, advisor_id, generated_by, generated_at, data) ' +
+        'SELECT id, type, period_from, period_to, advisor_id, generated_by, generated_at, data FROM reports'
+    );
+    exec('DROP TABLE reports');
+    exec('ALTER TABLE reports_new RENAME TO reports');
+    exec('COMMIT');
+  } catch (err) {
+    exec('ROLLBACK');
+    exec('PRAGMA foreign_keys = ON');
+    throw err;
+  }
+  exec('PRAGMA foreign_keys = ON');
+}
+
+// Pone un valor por defecto SOLO si esa llave todavia no existe -- a
+// diferencia de seedIfEmpty() (que solo corre en una base recien creada,
+// vacia de advisors), esto corre siempre y no pisa un valor que el usuario
+// ya haya editado desde Ajustes.
+async function ensureDefaultSetting(key, value) {
+  const current = await getSetting(key, null);
+  if (current === null) await setSetting(key, value);
+}
+
+// Datos de la empresa para el PDF de cotización nativo (pestaña "Cotizar",
+// ver server/routes/quotations.js) -- mismos datos que ya traía la plantilla
+// de Odoo que se usaba antes (ver un Cotización_S0....pdf viejo del
+// proyecto), para que el documento nuevo salga pareciendo el de siempre.
+// Editables despues desde Ajustes -> "Datos de la empresa (cotizaciones)".
+async function seedQuoteDefaults() {
+  await ensureDefaultSetting('quote_company_name', 'MANUFACTURAS Y DISEÑOS NOVA S.A.S.');
+  await ensureDefaultSetting('quote_company_nit', '900656236-1');
+  await ensureDefaultSetting('quote_company_address', 'Barranquilla, Colombia');
+  await ensureDefaultSetting('quote_company_phone', '3206439915');
+  await ensureDefaultSetting('quote_company_email', 'Comercial1@manufacturasnova.com');
+  await ensureDefaultSetting(
+    'quote_payment_details',
+    'Transferencia Bancolombia | Cuenta Corriente: 47700003069\nTransferencia Occidente | Cuenta Corriente: 810-859348\nBeneficiario: Manufacturas y Diseños Nova S.A.S. | NIT: 900656236-1'
+  );
+  await ensureDefaultSetting(
+    'quote_terms',
+    'Para iniciar la producción se requiere un anticipo del 50%. El saldo restante deberá cancelarse en su totalidad antes del despacho del pedido.\n' +
+      'El tiempo de entrega es de 8 días hábiles, contados a partir de la confirmación del anticipo y de la definición completa del diseño del producto. Este plazo puede variar según la cantidad, el tipo de producto o lo acordado con el asesor.\n' +
+      'Las garantías se atenderán dentro de los 15 días hábiles por fallas atribuibles a Manufacturas NOVA; el transporte corre por cuenta del cliente.\n' +
+      'Una vez aprobadas las artes y especificaciones del pedido, cualquier modificación posterior será responsabilidad del cliente, podrá generar costos adicionales y afectar el tiempo de entrega.\n' +
+      'La empresa no se hace responsable por retrasos ocasionados por causas externas, tales como transporte, fuerza mayor, demoras atribuibles a proveedores o la falta de información oportuna por parte del cliente.'
+  );
+}
+
 // Debe correr (y terminar) una sola vez al arrancar, antes de aceptar
 // peticiones -- ver index.js.
 async function init() {
@@ -263,6 +386,14 @@ async function init() {
   ensureColumn('leads', 'odoo_partner_id', 'INTEGER');
   ensureColumn('leads', 'odoo_lead_id', 'INTEGER');
   ensureColumn('leads', 'odoo_order_id', 'INTEGER');
+  // Dirección y correo directo en el lead (igual que ya vivía "document") --
+  // para que la pestaña "Cotizar" pueda pedir los datos de una cotización
+  // formal (NIT, dirección, correo) sin depender de que el lead tenga un
+  // cliente vinculado en la tabla clients (ver ensureColumn('clients',
+  // 'address'...) más abajo, que es el otro lugar donde ya vivían estos dos
+  // campos para "Alta Rápida").
+  ensureColumn('leads', 'address', 'TEXT');
+  ensureColumn('leads', 'email', 'TEXT');
   ensureColumn('clients', 'odoo_partner_id', 'INTEGER');
   // Emparejamiento explicito asesor del CRM <-> usuario y equipo de ventas en
   // Odoo. El Odoo del equipo tiene nombres distintos ("HAROLD SAN JUAN LECHUGA",
@@ -271,7 +402,18 @@ async function init() {
   // y routes/advisors.js). NULL = caer al emparejamiento por nombre.
   ensureColumn('advisors', 'odoo_user_id', 'INTEGER');
   ensureColumn('advisors', 'odoo_team_id', 'INTEGER');
+  // Descripción larga y descuento por línea de cotización (pestaña
+  // "Cotizar", motor nativo) -- se agregan aparte de CREATE TABLE porque
+  // quotation_lines ya puede tener filas de antes de este cambio.
+  ensureColumn('quotation_lines', 'description', 'TEXT');
+  ensureColumn('quotation_lines', 'discount_percent', 'REAL NOT NULL DEFAULT 0');
+  // Descripción del producto en el catálogo propio -- se copia como valor
+  // por defecto a la línea al elegirlo (el asesor la puede editar o borrar
+  // ahí, sin afectar la ficha del producto).
+  ensureColumn('products', 'description', 'TEXT');
+  ensureReportsTypeCheck();
   await seedIfEmpty();
+  await seedQuoteDefaults();
 }
 
 module.exports = { db, getSetting, setSetting, DEFAULT_ADVISORS, init };

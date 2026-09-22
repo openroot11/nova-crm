@@ -48,9 +48,13 @@ router.get('/:id', async (req, res) => {
 // Queda fijo desde ese momento (no se recalcula despues), a proposito: es el
 // registro historico que reemplaza la carpeta manual.
 router.post('/', async (req, res) => {
-  const { type, from, to, advisor_id } = req.body || {};
-  if (!['rendimiento', 'rentabilidad', 'asesor'].includes(type)) {
-    return res.status(400).json({ error: 'type debe ser "rendimiento", "rentabilidad" o "asesor"' });
+  const { type, from, to, advisor_id, notas } = req.body || {};
+  if (!['rendimiento', 'rentabilidad', 'asesor', 'mensual'].includes(type)) {
+    return res.status(400).json({ error: 'type debe ser "rendimiento", "rentabilidad", "asesor" o "mensual"' });
+  }
+  // El reporte de gerencia es el tablero propio del dueño: solo admin lo archiva.
+  if (type === 'mensual' && req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Solo un administrador puede archivar el reporte de gerencia' });
   }
 
   let data;
@@ -59,6 +63,18 @@ router.post('/', async (req, res) => {
     data = await reporting.computeFunnelReport(from, to);
   } else if (type === 'rentabilidad') {
     data = await reporting.computeProfitabilityReport(from, to);
+  } else if (type === 'mensual') {
+    data = await reporting.computeMonthlyReport(from, to);
+    // Las apreciaciones/observaciones se generan automáticamente pero se
+    // pueden editar antes de archivar: si vienen en el request, mandan sobre
+    // las sugeridas (se congelan en el snapshot tal cual las dejó gerencia).
+    const overrides = notas && typeof notas === 'object' ? notas : {};
+    for (const asesor of data.asesores) {
+      const n = overrides[asesor.advisor_id] || overrides[String(asesor.advisor_id)];
+      if (!n) continue;
+      if (Array.isArray(n.apreciaciones)) asesor.apreciaciones = n.apreciaciones.map((s) => String(s).slice(0, 200)).slice(0, 8);
+      if (Array.isArray(n.observaciones)) asesor.observaciones = n.observaciones.map((s) => String(s).slice(0, 200)).slice(0, 8);
+    }
   } else {
     if (!advisor_id) return res.status(400).json({ error: 'advisor_id es requerido para type "asesor"' });
     data = await reporting.computeAdvisorReport(advisor_id, from, to);
@@ -202,6 +218,69 @@ router.get('/:id/xlsx', async (req, res) => {
         : [{ Fecha: '', Cliente: 'Sin reasignaciones en el periodo', Motivo: '', Nuevo_asesor: '' }]
     );
     XLSX.utils.book_append_sheet(wb, reasigSheet, 'Reasignaciones');
+  } else if (row.type === 'mensual') {
+    const g = data.generales;
+    const r = data.rentabilidad;
+    const e = data.embudo;
+    const generalSheet = XLSX.utils.json_to_sheet([
+      { Indicador: 'Periodo', Valor: `${data.from} a ${data.to}` },
+      { Indicador: 'Comparado con', Valor: `${data.comparado_con.from} a ${data.comparado_con.to}` },
+      { Indicador: 'Días hábiles', Valor: data.dias_habiles },
+      { Indicador: 'Total ventas', Valor: g.total_ventas },
+      { Indicador: 'Tasa de cierre (%)', Valor: g.tasa_cierre },
+      { Indicador: 'Monto total', Valor: g.monto_total },
+      { Indicador: 'Ticket de venta', Valor: g.ticket_venta },
+      { Indicador: 'Efectividad asesores (%)', Valor: g.indicadores.efectividad_asesor },
+      { Indicador: 'Cotizados / asignados (%)', Valor: g.indicadores.cotizados_sobre_asignados },
+      { Indicador: 'Prom. semanal sin cotizar', Valor: g.indicadores.prom_semanal_sin_cotizar },
+      { Indicador: 'Tasa de reasignados (%)', Valor: g.indicadores.tasa_reasignados },
+      { Indicador: 'Embudo · leads crudos', Valor: e.total_leads_crudos },
+      { Indicador: 'Embudo · asignados', Valor: `${e.asignados} (${e.asignados_pct}%)` },
+      { Indicador: 'Embudo · cotizados', Valor: `${e.cotizados} (${e.cotizados_pct}%)` },
+      { Indicador: 'Inversión en ads', Valor: r.inversion },
+      { Indicador: 'Costo por lead', Valor: r.costo_por_lead },
+      { Indicador: 'Costo por venta', Valor: r.costo_por_venta },
+      { Indicador: 'ROI (veces)', Valor: r.roi_veces },
+      { Indicador: 'ROI (%)', Valor: r.roi_pct },
+      { Indicador: 'La inversión representa sobre las ventas (%)', Valor: r.ads_pct_of_sales },
+    ]);
+    XLSX.utils.book_append_sheet(wb, generalSheet, 'Resultados generales');
+
+    const asesoresSheet = XLSX.utils.json_to_sheet(
+      data.asesores.map((a) => ({
+        Asesor: a.name,
+        Ranking: a.rank,
+        'Leads (asignados)': a.asignados,
+        '% del total de leads': a.asignados_pct_equipo,
+        Cotizados: a.cotizados,
+        'Por cotizar': a.pendientes_por_cotizar,
+        Reasignados: a.reasignados,
+        Ventas: a.vendidos,
+        'Tasa de cierre (%)': a.tasa_cierre,
+        'Monto vendido': a.monto_vendido,
+        'Ticket de venta': a.ticket_venta,
+        'Participación en ventas (%)': a.participacion_ventas_pct,
+        'Ventas por día': a.ventas_por_dia_texto,
+        'Efectividad (%)': a.indicadores.efectividad_asesor,
+        'Cotizados/Asignados (%)': a.indicadores.cotizados_sobre_asignados,
+        'Prom. semanal sin cotizar': a.indicadores.prom_semanal_sin_cotizar,
+        'Reasignados (%)': a.indicadores.tasa_reasignados,
+        Apreciaciones: (a.apreciaciones || []).join(' · '),
+        Observaciones: (a.observaciones || []).join(' · '),
+      }))
+    );
+    XLSX.utils.book_append_sheet(wb, asesoresSheet, 'Por asesor');
+
+    const diaSheet = XLSX.utils.json_to_sheet(
+      data.promedios_por_dia.map((d) => ({
+        Día: d.label,
+        'Ocurrencias en el periodo': d.ocurrencias,
+        'Prom. leads ingresados': d.ingresados,
+        'Prom. leads asignados': d.asignados,
+        'Prom. ventas': d.ventas,
+      }))
+    );
+    XLSX.utils.book_append_sheet(wb, diaSheet, 'Promedios por día');
   }
 
   const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });

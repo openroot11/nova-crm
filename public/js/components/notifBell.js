@@ -79,7 +79,7 @@ export function mountNotifBell(container, ctx) {
     const btn = e.target.closest('.notif-item');
     if (!btn) return;
     setNotifOpen(false);
-    ctx.navigate('sla');
+    ctx.navigate('ventas');
   });
   document.addEventListener('click', onDocClick);
   document.addEventListener('keydown', onKeydown);

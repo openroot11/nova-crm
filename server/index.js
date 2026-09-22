@@ -72,6 +72,10 @@ async function main() {
   app.use('/api/leads', require('./routes/leads'));
   app.use('/api/advisors', require('./routes/advisors'));
   app.use('/api/clients', require('./routes/clients'));
+  // Cotizaciones nativas de Nova (pestaña "Cotizar") -- sin Odoo de por
+  // medio, ver server/nativeQuotes.js.
+  app.use('/api/products', require('./routes/products'));
+  app.use('/api/quotations', require('./routes/quotations'));
   app.use('/api/kpis', requireRole('admin', 'coordinador'), require('./routes/kpis'));
   app.use('/api/marketing', requireRole('admin', 'coordinador'), require('./routes/marketing'));
   app.use('/api/reports', requireRole('admin', 'coordinador'), require('./routes/reports'));

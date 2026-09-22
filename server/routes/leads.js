@@ -4,6 +4,7 @@ const { db } = require('../db');
 const sla = require('../sla');
 const followup = require('../followup');
 const odoo = require('../odoo');
+const nativeQuotes = require('../nativeQuotes');
 const { broadcast } = require('../realtime');
 const { requireRole } = require('../middleware/auth');
 
@@ -205,6 +206,18 @@ async function pushOdooStage(lead, stageKey) {
     await odoo.moveOpportunityStage(lead.odoo_lead_id, stageKey);
   } catch (err) {
     console.error(`[odoo] lead ${lead.id}: no se movio la etapa a "${stageKey}":`, err.message);
+  }
+}
+
+// Al editar los datos de un lead ya sincronizado (ver "Editar" en el CRM),
+// llevar notas y ciudad a la oportunidad en Odoo -- si no, quedaban pegadas
+// en el CRM porque syncLeadToOdoo solo escribe una vez, al crear. Best-effort.
+async function pushOdooDetails(lead) {
+  if (!odoo.isEnabled() || !lead || !lead.odoo_lead_id) return;
+  try {
+    await odoo.updateOpportunityDetails(lead.odoo_lead_id, { description: lead.notes, city: lead.city });
+  } catch (err) {
+    console.error(`[odoo] lead ${lead.id}: no se actualizaron notas/ciudad:`, err.message);
   }
 }
 
@@ -570,11 +583,42 @@ router.get('/:id', async (req, res) => {
   res.json(await serialize(lead, advisorRate));
 });
 
+// Elimina un lead por completo (registros de prueba, duplicados, errores de
+// captura). Solo coordinador/admin -- a diferencia de reasignar o cerrar, esto
+// no se puede deshacer desde la UI. Si el lead ya tenia oportunidad en Odoo,
+// se archiva alla tambien (no se borra duro -- Odoo desaconseja el unlink de
+// crm.lead; archivada ya no aparece en el pipeline activo). Best-effort: si
+// Odoo falla, el lead igual se borra del CRM y se avisa en la respuesta.
+router.delete('/:id', requireRole('coordinador', 'admin'), async (req, res) => {
+  const id = Number(req.params.id);
+  const lead = await db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
+  if (!lead) return res.status(404).json({ error: 'Lead no encontrado' });
+
+  let odoo_warning = null;
+  if (lead.odoo_lead_id) {
+    try {
+      await odoo.archiveOpportunity(lead.odoo_lead_id);
+    } catch (err) {
+      odoo_warning = `El lead se eliminó del CRM, pero no se pudo archivar la oportunidad en Odoo: ${err.message}`;
+    }
+  }
+
+  const tx = db.transaction(async () => {
+    await db.prepare('DELETE FROM payments WHERE lead_id = ?').run(id);
+    await db.prepare('DELETE FROM reassignments WHERE lead_id = ?').run(id);
+    await db.prepare('DELETE FROM leads WHERE id = ?').run(id);
+  });
+  await tx();
+
+  broadcast('leads_changed', { reason: 'deleted', id });
+  res.json({ ok: true, odoo_warning });
+});
+
 const DEFAULT_SOURCE = 'WhatsApp';
 const DEFAULT_CHANNEL_DETAIL = 'Google Ads';
 
 router.post('/', requireRole('coordinador', 'admin'), async (req, res) => {
-  const { client_name, phone, document, product, notes, advisor_id, source, city, created_at, client_id } = req.body || {};
+  const { client_name, phone, document, product, notes, advisor_id, source, city, created_at, client_id, address, email } = req.body || {};
   if (!client_name || !client_name.trim()) return res.status(400).json({ error: 'client_name es requerido' });
   if (!phone || !phone.trim()) return res.status(400).json({ error: 'phone es requerido' });
   const advisor = await db.prepare('SELECT * FROM advisors WHERE id = ? AND active = true').get(Number(advisor_id));
@@ -593,8 +637,8 @@ router.post('/', requireRole('coordinador', 'admin'), async (req, res) => {
   }
   const info = await db
     .prepare(
-      `INSERT INTO leads (client_name, phone, document, product, notes, status, assigned_advisor_id, source, channel_detail, city, created_at, client_id)
-       VALUES (?, ?, ?, ?, ?, 'asignado', ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO leads (client_name, phone, document, product, notes, status, assigned_advisor_id, source, channel_detail, city, created_at, client_id, address, email)
+       VALUES (?, ?, ?, ?, ?, 'asignado', ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       client_name.trim(),
@@ -611,7 +655,9 @@ router.post('/', requireRole('coordinador', 'admin'), async (req, res) => {
       DEFAULT_CHANNEL_DETAIL,
       (city && city.trim()) || null,
       now,
-      client ? client.id : null
+      client ? client.id : null,
+      (address && address.trim()) || null,
+      (email && email.trim()) || null
     );
 
   const created = await db.prepare('SELECT * FROM leads WHERE id = ?').get(info.lastInsertRowid);
@@ -620,7 +666,7 @@ router.post('/', requireRole('coordinador', 'admin'), async (req, res) => {
   const odooResult = await syncLeadToOdoo(created.id);
 
   const lead = await db.prepare('SELECT * FROM leads WHERE id = ?').get(created.id);
-  broadcast('leads_changed', { reason: 'created', id: lead.id });
+  broadcast('leads_changed', { reason: 'created', id: lead.id, client_name: lead.client_name, advisor_name: advisor.name });
   const payload = await serialize(lead);
   if (odooResult.error) {
     payload.odoo_warning = `El lead se guardó, pero no se pudo sincronizar con Odoo: ${odooResult.error}`;
@@ -645,7 +691,7 @@ router.patch('/:id', async (req, res) => {
   if (!lead) return res.status(404).json({ error: 'Lead no encontrado' });
   if (!canEditLead(req.user, lead)) return res.status(403).json({ error: 'No tienes permiso para editar este lead' });
 
-  const { client_name, phone, document, product, notes, city, source, channel_detail, sale_reference } = req.body || {};
+  const { client_name, phone, document, product, notes, city, source, channel_detail, sale_reference, address, email } = req.body || {};
   if (client_name !== undefined && !client_name.trim()) return res.status(400).json({ error: 'El nombre no puede quedar vacío' });
   if (phone !== undefined && !phone.trim()) return res.status(400).json({ error: 'El teléfono no puede quedar vacío' });
   if (channel_detail !== undefined && channel_detail && !CHANNEL_DETAILS.includes(channel_detail)) {
@@ -654,7 +700,7 @@ router.patch('/:id', async (req, res) => {
 
   await db
     .prepare(
-      `UPDATE leads SET client_name = ?, phone = ?, document = ?, product = ?, notes = ?, city = ?, source = ?, channel_detail = ?, sale_reference = ? WHERE id = ?`
+      `UPDATE leads SET client_name = ?, phone = ?, document = ?, product = ?, notes = ?, city = ?, source = ?, channel_detail = ?, sale_reference = ?, address = ?, email = ? WHERE id = ?`
     )
     .run(
       client_name !== undefined ? client_name.trim() : lead.client_name,
@@ -666,10 +712,13 @@ router.patch('/:id', async (req, res) => {
       source !== undefined ? (source.trim() || DEFAULT_SOURCE) : lead.source,
       channel_detail !== undefined ? (channel_detail || DEFAULT_CHANNEL_DETAIL) : lead.channel_detail,
       sale_reference !== undefined ? (sale_reference.trim() || null) : lead.sale_reference,
+      address !== undefined ? (address.trim() || null) : lead.address,
+      email !== undefined ? (email.trim() || null) : lead.email,
       id
     );
 
   const updated = await db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
+  if (notes !== undefined || city !== undefined) await pushOdooDetails(updated);
   broadcast('leads_changed', { reason: 'edited', id });
   res.json(await serialize(updated));
 });
@@ -823,7 +872,8 @@ router.post('/:id/quotation', async (req, res) => {
          contacted_at = COALESCE(contacted_at, ?)
        WHERE id = ?`
     )
-    .run(order.id, order.name, order.amount_total, now, now, id);
+    // amount_untaxed (sin IVA): el reporte de ventas del CRM se lleva sin impuestos.
+    .run(order.id, order.name, order.amount_untaxed, now, now, id);
 
   const updated = await db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
   await pushOdooStage(updated, 'quoted');
@@ -884,8 +934,9 @@ router.put('/:id/quotation', async (req, res) => {
     return res.status(502).json({ error: `Odoo: ${err.message}` });
   }
   await db
+    // amount_untaxed (sin IVA): el reporte de ventas del CRM se lleva sin impuestos.
     .prepare('UPDATE leads SET sale_reference = ?, amount = ? WHERE id = ?')
-    .run(order.name, order.amount_total, id);
+    .run(order.name, order.amount_untaxed, id);
   const updated = await db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
   broadcast('leads_changed', { reason: 'quoted', id });
   res.json({ lead: await serialize(updated), quotation: order });
@@ -906,6 +957,60 @@ router.get('/:id/quotation/pdf', async (req, res) => {
   } catch (err) {
     res.status(502).json({ error: `Odoo: ${err.message}` });
   }
+});
+
+// ===========================================================================
+//  Cotizaciones nativas de Nova (pestaña "Cotizar") -- SIN Odoo de por medio.
+//  Aparte del flujo de arriba (Odoo, ver server/odoo.js): esta guarda todo en
+//  las tablas propias quotations/quotation_lines (ver db.js y
+//  server/nativeQuotes.js). Un lead puede llegar a tener cotizaciones de los
+//  dos tipos a la vez si se usó primero un flujo y luego el otro -- no se
+//  mezclan ni se pisan entre sí.
+// ===========================================================================
+router.get('/:id/quotations', async (req, res) => {
+  const id = Number(req.params.id);
+  const lead = await db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
+  if (!lead) return res.status(404).json({ error: 'Lead no encontrado' });
+  if (!canOperateOn(req.user, lead)) return res.status(403).json({ error: 'No tienes permiso sobre este lead' });
+  const rows = await db.prepare('SELECT id FROM quotations WHERE lead_id = ? ORDER BY created_at DESC').all(id);
+  const quotations = await Promise.all(rows.map((r) => nativeQuotes.readQuotation(r.id)));
+  res.json({ quotations });
+});
+
+router.post('/:id/quotations', async (req, res) => {
+  const id = Number(req.params.id);
+  const lead = await db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
+  if (!lead) return res.status(404).json({ error: 'Lead no encontrado' });
+  if (!canOperateOn(req.user, lead)) return res.status(403).json({ error: 'No tienes permiso sobre este lead' });
+
+  const { lines, validity_days, note } = req.body || {};
+  const cleanLines = Array.isArray(lines) ? lines.filter((l) => l && l.product_name && Number(l.qty) > 0) : [];
+  if (!cleanLines.length) return res.status(400).json({ error: 'Agrega al menos un producto a la cotización' });
+
+  const days = Number(validity_days) > 0 ? Number(validity_days) : 8;
+  const validityDate = new Date(Date.now() + days * 86400000).toISOString().slice(0, 10);
+
+  const info = await db
+    .prepare('INSERT INTO quotations (lead_id, validity_days, validity_date, note, created_by) VALUES (?, ?, ?, ?, ?)')
+    .run(id, days, validityDate, (note && note.trim()) || null, req.user.id || null);
+  const quotationId = info.lastInsertRowid;
+  await db.prepare("UPDATE quotations SET number = printf('COT-%04d', id) WHERE id = ?").run(quotationId);
+  await nativeQuotes.writeLines(quotationId, cleanLines);
+
+  const now = nowUtc();
+  await db
+    .prepare(
+      `UPDATE leads SET
+         status = CASE WHEN status IN ('asignado', 'contactado') THEN 'cotizado' ELSE status END,
+         quoted_at = COALESCE(quoted_at, ?),
+         contacted_at = COALESCE(contacted_at, ?)
+       WHERE id = ?`
+    )
+    .run(now, now, id);
+
+  const quotation = await nativeQuotes.readQuotation(quotationId);
+  broadcast('leads_changed', { reason: 'quoted', id });
+  res.status(201).json({ quotation });
 });
 
 // Registrar que se le dio seguimiento a una cotizacion enviada (se le
@@ -991,12 +1096,21 @@ router.post('/:id/close', async (req, res) => {
     // se deja el que ya tuviera el lead en vez de borrarlo con null -- este
     // mismo endpoint tambien lo usa el cierre normal desde Ventas, que nunca
     // manda este campo.
-    .prepare('UPDATE leads SET status = ?, closed_at = ?, amount = ?, sale_reference = COALESCE(?, sale_reference) WHERE id = ?')
+    // channel_detail se fuerza a 'Google Ads' al ganar: leads_visible (ver
+    // db.js) solo muestra ese canal en Ventas Cerradas/Dashboard/Informe, asi
+    // que sin esto una venta real se "perdia" de esas pantallas si el lead
+    // que se cerro (a veces uno historico reciclado, con otro canal o
+    // ninguno) no traia ya ese canal -- la venta quedaba guardada pero
+    // invisible, sin ningun aviso de por que.
+    .prepare(
+      "UPDATE leads SET status = ?, closed_at = ?, amount = ?, sale_reference = COALESCE(?, sale_reference), channel_detail = CASE WHEN ? = 'ganado' THEN 'Google Ads' ELSE channel_detail END WHERE id = ?"
+    )
     .run(
       result === 'ganado' ? 'cerrado_ganado' : 'cerrado_perdido',
       now,
       result === 'ganado' ? Number(amount) || 0 : 0,
       result === 'ganado' && sale_reference && sale_reference.trim() ? sale_reference.trim() : null,
+      result,
       id
     );
 
@@ -1011,12 +1125,11 @@ router.post('/:id/close', async (req, res) => {
     try {
       if (result === 'ganado') {
         if (closedLead.odoo_order_id) {
-          const order = await odoo.confirmOrder(closedLead.odoo_order_id);
-          // El total del pedido confirmado en Odoo manda sobre el monto tecleado.
-          await db
-            .prepare('UPDATE leads SET amount = ?, sale_reference = ? WHERE id = ?')
-            .run(order.amount_total, order.name, id);
-          closedLead = await db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
+          // Solo confirmar el pedido en Odoo (borrador -> Pedido de venta).
+          // El monto que se reporta en el CRM es el que tecleó el asesor (sin
+          // IVA) -- NO se sobrescribe con el total del pedido en Odoo, que
+          // incluye impuestos.
+          await odoo.confirmOrder(closedLead.odoo_order_id);
         }
         await pushOdooStage(closedLead, 'won');
       } else if (closedLead.odoo_lead_id) {

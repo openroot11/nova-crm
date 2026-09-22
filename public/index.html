@@ -266,8 +266,10 @@
     </div>
   </div>
   <ul id="nav-list" class="flex-1 overflow-y-auto py-2 px-3 space-y-0.5">
+    <li><a data-route="dashboard1" href="#/dashboard1" class="nav-link flex items-center gap-3 px-3 py-2.5 rounded-lg text-on-surface-variant hover:bg-surface-container-low transition-colors">
+      <span class="material-symbols-outlined text-[20px]">space_dashboard</span><span class="text-label-bold font-label-bold">Dashboard 1</span></a></li>
     <li><a data-route="dashboard" href="#/dashboard" class="nav-link flex items-center gap-3 px-3 py-2.5 rounded-lg text-on-surface-variant hover:bg-surface-container-low transition-colors">
-      <span class="material-symbols-outlined text-[20px]">dashboard</span><span class="text-label-bold font-label-bold">Dashboard</span></a></li>
+      <span class="material-symbols-outlined text-[20px]">dashboard</span><span class="text-label-bold font-label-bold">Dashboard 2</span></a></li>
 
     <li>
       <details data-group="ventas" open class="group/nav">
@@ -278,9 +280,9 @@
         </summary>
         <ul class="mt-0.5 ml-[18px] pl-4 border-l border-outline-variant space-y-0.5">
           <li><a data-route="ventas" href="#/ventas" class="nav-link flex items-center px-3 py-2 rounded-lg text-body-sm font-body-sm text-on-surface-variant hover:bg-surface-container-low transition-colors">Registro Operativo</a></li>
-          <li><a data-route="sla" href="#/sla" class="nav-link flex items-center px-3 py-2 rounded-lg text-body-sm font-body-sm text-on-surface-variant hover:bg-surface-container-low transition-colors">Control SLA</a></li>
           <li><a data-route="seguimiento" href="#/seguimiento" class="nav-link flex items-center px-3 py-2 rounded-lg text-body-sm font-body-sm text-on-surface-variant hover:bg-surface-container-low transition-colors">Seguimiento</a></li>
           <li><a data-route="cotizaciones" href="#/cotizaciones" class="nav-link flex items-center px-3 py-2 rounded-lg text-body-sm font-body-sm text-on-surface-variant hover:bg-surface-container-low transition-colors">Cotizaciones</a></li>
+          <li><a data-route="cotizar" href="#/cotizar" class="nav-link flex items-center px-3 py-2 rounded-lg text-body-sm font-body-sm text-on-surface-variant hover:bg-surface-container-low transition-colors">Cotizar</a></li>
         </ul>
       </details>
     </li>
@@ -293,6 +295,8 @@
       <span class="material-symbols-outlined text-[20px]">paid</span><span class="text-label-bold font-label-bold">Ventas Cerradas</span></a></li>
     <li><a data-route="estadisticas" href="#/estadisticas" class="nav-link flex items-center gap-3 px-3 py-2.5 rounded-lg text-on-surface-variant hover:bg-surface-container-low transition-colors">
       <span class="material-symbols-outlined text-[20px]">leaderboard</span><span class="text-label-bold font-label-bold">Estadísticas</span></a></li>
+    <li><a data-route="reporte" href="#/reporte" class="nav-link flex items-center gap-3 px-3 py-2.5 rounded-lg text-on-surface-variant hover:bg-surface-container-low transition-colors">
+      <span class="material-symbols-outlined text-[20px]">assessment</span><span class="text-label-bold font-label-bold">Reporte</span></a></li>
     <li><a data-route="asesores" href="#/asesores" class="nav-link flex items-center gap-3 px-3 py-2.5 rounded-lg text-on-surface-variant hover:bg-surface-container-low transition-colors">
       <span class="material-symbols-outlined text-[20px]">group</span><span class="text-label-bold font-label-bold">Asesores</span></a></li>
     <li><a data-route="ajustes" href="#/ajustes" class="nav-link flex items-center gap-3 px-3 py-2.5 rounded-lg text-on-surface-variant hover:bg-surface-container-low transition-colors">
@@ -321,10 +325,6 @@
            todas las pantallas; ahora cada vista los monta donde le sirven
            (hoy solo Ventas, ver ventas.js) para que este encabezado quede
            limpio en el resto. -->
-      <button id="sla-badge-btn" class="hidden p-2 text-error hover:text-error/80 transition-colors relative" title="Leads críticos SLA">
-        <span class="material-symbols-outlined">warning</span>
-        <span id="sla-badge-count" class="absolute -top-0.5 -right-0.5 bg-error text-on-error text-[10px] font-bold rounded-full w-4 h-4 flex items-center justify-center">0</span>
-      </button>
       <span id="conn-dot" class="w-2 h-2 rounded-full bg-outline-variant ml-1" title="Conectando…"></span>
     </div>
   </header>

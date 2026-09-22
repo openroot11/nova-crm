@@ -2,6 +2,7 @@ const express = require('express');
 const { db } = require('../db');
 const sla = require('../sla');
 const reporting = require('../reporting');
+const { requireRole } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -117,6 +118,18 @@ router.get('/profitability', async (req, res) => {
 router.get('/advisor/:id', async (req, res) => {
   const report = await reporting.computeAdvisorReport(req.params.id, req.query.from, req.query.to);
   if (!report) return res.status(404).json({ error: 'Asesor no encontrado' });
+  res.json(report);
+});
+
+/**
+ * GET /api/kpis/monthly?from=YYYY-MM-DD&to=YYYY-MM-DD
+ * Reporte de gerencia ("Reporte de Servicio al Cliente"): resultados
+ * generales, embudo, rentabilidad de ads, resultados por asesor y promedios
+ * por día de la semana, en un rango (por defecto el mes calendario actual).
+ * Solo admin -- es el tablero propio del dueño.
+ */
+router.get('/monthly', requireRole('admin'), async (req, res) => {
+  const report = await reporting.computeMonthlyReport(req.query.from, req.query.to);
   res.json(report);
 });
 

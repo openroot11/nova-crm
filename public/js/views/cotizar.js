@@ -1,0 +1,783 @@
+import { escapeHtml, formatMoney, initials } from '../utils.js';
+import { openCloseModal } from '../components/leadActions.js';
+
+// Pestaña "Cotizar": motor de cotizaciones propio de Nova CRM, sin ninguna
+// dependencia de Odoo -- guarda todo en las tablas nativas del CRM
+// (server/nativeQuotes.js: quotations/quotation_lines/products) para que
+// esta pantalla siga funcionando aunque en algún momento el negocio deje de
+// usar Odoo en conjunto con el CRM. El flujo viejo (botón "Cotizar" en
+// Ventas/SLA/Kanban, que sí arma un sale.order en Odoo -- ver
+// leadActions.js openQuotationModal) sigue existiendo tal cual, aparte; esta
+// pestaña es la única que usa el motor nativo por ahora.
+//
+// Todo en UNA sola pantalla (buscar/crear cliente + armar la cotización),
+// sin pasar de una vista de "buscador" a otra de "formulario" -- el
+// buscador de cliente es solo el primer campo de este mismo formulario.
+// Datos de cliente pensados para una cotización formal (NIT, dirección,
+// correo, ciudad), más funciones tipo Salesforce/Odoo CPQ: descripción y
+// descuento % por línea, reordenar líneas, duplicar ("Clone") una
+// cotización para armar una revisión, historial de cotizaciones del mismo
+// lead, y compartir por WhatsApp.
+
+const STATE_STEPS = [
+  { key: 'draft', label: 'Cotización', icon: 'edit_note' },
+  { key: 'sent', label: 'Enviada', icon: 'send' },
+  { key: 'sale', label: 'Pedido de venta', icon: 'task_alt' },
+];
+
+const IVA_RATE = 0.19;
+
+function fmtDate(isoDate) {
+  if (!isoDate) return '—';
+  const d = new Date(`${String(isoDate).slice(0, 10)}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return isoDate;
+  return d.toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+
+function todayIso() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function addDaysIso(days) {
+  return new Date(Date.now() + Number(days) * 86400000).toISOString().slice(0, 10);
+}
+
+function daysUntil(isoDate) {
+  if (!isoDate) return null;
+  const target = new Date(`${String(isoDate).slice(0, 10)}T00:00:00`).getTime();
+  if (Number.isNaN(target)) return null;
+  return Math.ceil((target - Date.now()) / 86400000);
+}
+
+const STATE_BADGE = {
+  draft: 'bg-surface-container-high text-on-surface-variant',
+  sent: 'bg-tertiary-container text-on-tertiary-container',
+  sale: 'bg-secondary-container text-on-secondary-container',
+  cancel: 'bg-error-container text-on-error-container',
+};
+const STATE_LABEL = { draft: 'Borrador', sent: 'Enviada', sale: 'Confirmada', cancel: 'Cancelada' };
+
+function field(id, label, value, opts = {}) {
+  const { type = 'text', required = false, readonly = false, span = '' } = opts;
+  return `
+    <div class="${span}">
+      <label class="block text-[10px] font-label-bold uppercase tracking-wide text-on-surface-variant mb-1">${label}${required ? ' *' : ''}</label>
+      <input id="${id}" type="${type}" ${readonly ? 'readonly' : ''} value="${escapeHtml(value || '')}" class="w-full p-2 border border-outline-variant rounded-md outline-none focus:border-outline focus:ring-2 focus:ring-outline/20 text-body-sm ${readonly ? 'bg-surface-container-low text-on-surface-variant' : ''}" />
+    </div>`;
+}
+
+export async function mount(container, ctx) {
+  container.innerHTML = `
+    <div class="mb-gutter">
+      <h2 class="text-headline-lg font-headline-lg text-on-surface mb-base">Cotizar</h2>
+      <p class="text-body-md font-body-md text-on-surface-variant">Busca un cliente (o registra uno nuevo) y arma su cotización en la misma pantalla: datos de facturación, productos, descuentos e impuestos -- guardado directo en Nova, sin pasar por Odoo.</p>
+    </div>
+    <div id="cz-root"></div>
+  `;
+  const root = container.querySelector('#cz-root');
+
+  // ---- estado ---------------------------------------------------------------
+  let lead = null; // null = cliente aun no elegido/creado
+  let quotation = null; // última cotización nativa leída/creada para el lead
+  let history = []; // todas las cotizaciones nativas del lead (para el historial)
+  let advisorsCache = [];
+  if (ctx.user?.role !== 'asesor') {
+    try {
+      advisorsCache = (await ctx.api.get('/api/advisors')).filter((a) => !a.is_group && a.active);
+    } catch {
+      /* si falla, el select de asesor simplemente sale vacio */
+    }
+  }
+
+  function isEditable() {
+    return !quotation || quotation.state === 'draft' || quotation.state === 'sent';
+  }
+
+  // Trae el historial de cotizaciones nativas del lead activo y deja
+  // `quotation` apuntando a la indicada (o a la última no cancelada).
+  async function refreshHistory(preselectId) {
+    quotation = null;
+    history = [];
+    try {
+      const data = await ctx.api.get(`/api/leads/${lead.id}/quotations`);
+      history = data.quotations || [];
+      quotation = preselectId
+        ? history.find((q) => q.id === preselectId) || null
+        : history.find((q) => q.state !== 'cancel') || null;
+    } catch (err) {
+      ctx.toast(err.message, 'error');
+    }
+  }
+
+  function resetAll() {
+    lead = null;
+    quotation = null;
+    history = [];
+    render();
+  }
+
+  // ---- barra de estado (draft -> sent -> sale) -------------------------------
+  function statusStepper() {
+    if (quotation && quotation.state === 'cancel') {
+      return `<span class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-body-sm font-bold bg-error-container text-on-error-container"><span class="material-symbols-outlined text-[16px]">cancel</span>Cancelada</span>`;
+    }
+    const currentKey = quotation ? quotation.state : 'draft';
+    const currentIdx = Math.max(0, STATE_STEPS.findIndex((s) => s.key === currentKey));
+    return `
+      <div class="flex items-center gap-1.5 flex-wrap">
+        ${STATE_STEPS.map((s, i) => {
+          const done = i < currentIdx;
+          const current = i === currentIdx;
+          const cls = current
+            ? 'bg-primary text-on-primary'
+            : done
+              ? 'bg-primary-container text-on-primary-container'
+              : 'bg-surface-container-high text-on-surface-variant';
+          const arrow = i < STATE_STEPS.length - 1 ? '<span class="material-symbols-outlined text-[16px] text-on-surface-variant">chevron_right</span>' : '';
+          return `<span class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-body-sm font-bold ${cls}"><span class="material-symbols-outlined text-[16px]">${done ? 'check_circle' : s.icon}</span>${s.label}</span>${arrow}`;
+        }).join('')}
+      </div>`;
+  }
+
+  // ---- historial de cotizaciones del lead ------------------------------------
+  function historyStrip() {
+    if (history.length < 2) return '';
+    return `
+      <div class="px-5 pt-4 flex items-center gap-2 flex-wrap">
+        <span class="text-[11px] font-label-bold uppercase tracking-wide text-on-surface-variant flex items-center gap-1"><span class="material-symbols-outlined text-[14px]">history</span>Historial</span>
+        ${history
+          .map((q) => {
+            const active = quotation && q.id === quotation.id;
+            return `<button type="button" data-hist="${q.id}" class="px-2.5 py-1 rounded-full text-[11px] font-bold border transition-colors ${
+              active
+                ? 'bg-primary text-on-primary border-primary'
+                : 'border-outline-variant text-on-surface-variant hover:bg-surface-container-low'
+            }">${escapeHtml(q.number || '—')} · ${formatMoney(q.amount_total)}</button>`;
+          })
+          .join('')}
+      </div>`;
+  }
+
+  // ---- líneas de producto -----------------------------------------------------
+  function computeClientTotals(list) {
+    let sub = 0;
+    list.querySelectorAll('[data-line]').forEach((row) => {
+      const qtyEl = row.querySelector('[data-qty]');
+      if (!qtyEl) return; // fila de solo lectura (cotización confirmada)
+      const qty = Number(qtyEl.value) || 0;
+      const priceRaw = row.querySelector('[data-price]').value;
+      const price = priceRaw === '' ? Number(row.dataset.listPrice || 0) : Number(priceRaw);
+      const discount = Math.min(100, Math.max(0, Number(row.querySelector('[data-discount]')?.value) || 0));
+      sub += qty * price * (1 - discount / 100);
+    });
+    return sub;
+  }
+
+  function renderTotals() {
+    const totalsEl = root.querySelector('#cz-totals');
+    const list = root.querySelector('#cz-lines');
+    if (!totalsEl || !list) return;
+    if (!isEditable()) {
+      totalsEl.innerHTML = `
+        <div class="flex justify-between gap-8 text-body-sm text-on-surface-variant"><span>Subtotal</span><span class="font-bold text-on-surface">${formatMoney(quotation.amount_untaxed)}</span></div>
+        <div class="flex justify-between gap-8 text-body-sm text-on-surface-variant mt-1"><span>IVA 19%</span><span class="font-bold text-on-surface">${formatMoney(quotation.amount_tax)}</span></div>
+        <div class="flex justify-between gap-8 items-baseline mt-2 pt-2 border-t border-outline-variant"><span class="text-body-md font-bold text-on-surface">Total</span><span class="text-headline-sm font-headline-sm font-bold text-primary">${formatMoney(quotation.amount_total)}</span></div>
+      `;
+      return;
+    }
+    const sub = computeClientTotals(list);
+    const iva = sub * IVA_RATE;
+    totalsEl.innerHTML = `
+      <div class="flex justify-between gap-8 text-body-sm text-on-surface-variant"><span>Subtotal</span><span class="font-bold text-on-surface">${formatMoney(sub)}</span></div>
+      <div class="flex justify-between gap-8 text-body-sm text-on-surface-variant mt-1"><span>IVA 19%</span><span class="font-bold text-on-surface">${formatMoney(iva)}</span></div>
+      <div class="flex justify-between gap-8 items-baseline mt-2 pt-2 border-t border-outline-variant"><span class="text-body-md font-bold text-on-surface">Total</span><span class="text-headline-sm font-headline-sm font-bold text-primary">${formatMoney(sub + iva)}</span></div>
+    `;
+    const countEl = root.querySelector('#cz-line-count');
+    if (countEl) countEl.textContent = list.querySelectorAll('[data-line]').length;
+  }
+
+  function moveRow(row, dir) {
+    const sibling = dir === 'up' ? row.previousElementSibling : row.nextElementSibling;
+    if (!sibling) return;
+    if (dir === 'up') row.parentElement.insertBefore(row, sibling);
+    else row.parentElement.insertBefore(sibling, row);
+    renderTotals();
+  }
+
+  function appendLineRow(list, preset, editable) {
+    const row = document.createElement('div');
+    row.dataset.line = '';
+    row.className = 'border border-outline-variant rounded-lg p-3 mb-2 bg-surface-container-lowest';
+    if (preset && preset.price_unit != null) row.dataset.listPrice = Math.round(preset.price_unit);
+
+    if (!editable) {
+      const discount = Number(preset.discount_percent) || 0;
+      row.innerHTML = `
+        <div class="flex items-start justify-between gap-3">
+          <div class="min-w-0">
+            <p class="font-bold text-on-surface truncate">${escapeHtml(preset.product_name || '—')}</p>
+            ${preset.description ? `<p class="text-[12px] text-on-surface-variant mt-0.5">${escapeHtml(preset.description)}</p>` : ''}
+          </div>
+          <p class="font-bold text-on-surface shrink-0">${formatMoney(preset.subtotal ?? preset.qty * preset.price_unit)}</p>
+        </div>
+        <div class="flex items-center gap-3 mt-2 text-[12px] text-on-surface-variant">
+          <span>${preset.qty} Unidades</span>
+          <span>${formatMoney(preset.price_unit)} c/u</span>
+          ${discount > 0 ? `<span class="text-error font-bold">− ${discount}%</span>` : ''}
+          <span class="px-1.5 py-0.5 rounded bg-surface-container-high">IVA 19%</span>
+        </div>
+      `;
+      list.appendChild(row);
+      return;
+    }
+
+    row.innerHTML = `
+      <div class="flex items-start gap-2">
+        <div class="flex flex-col gap-0.5 pt-1.5 shrink-0">
+          <button type="button" data-move-up class="p-0.5 rounded text-on-surface-variant hover:bg-surface-container-low" aria-label="Subir"><span class="material-symbols-outlined text-[16px]">keyboard_arrow_up</span></button>
+          <button type="button" data-move-down class="p-0.5 rounded text-on-surface-variant hover:bg-surface-container-low" aria-label="Bajar"><span class="material-symbols-outlined text-[16px]">keyboard_arrow_down</span></button>
+        </div>
+        <div class="flex-1 min-w-0">
+          <div class="relative">
+            <input data-prod-search type="text" autocomplete="off" placeholder="Buscar producto o escribir uno nuevo…" class="w-full p-2 border border-outline-variant rounded-md outline-none focus:border-outline text-body-sm font-bold" />
+            <input data-prod type="hidden" />
+            <div data-prod-results class="hidden fixed z-[9999] bg-surface border border-outline-variant rounded-md shadow-lg max-h-52 overflow-y-auto"></div>
+          </div>
+          <input data-description type="text" placeholder="Descripción (opcional)" class="w-full p-1.5 mt-1.5 border-0 border-b border-transparent hover:border-outline-variant focus:border-outline text-[12px] text-on-surface-variant outline-none bg-transparent" />
+          <div class="flex items-end gap-3 mt-2 flex-wrap">
+            <div>
+              <label class="block text-[10px] font-label-bold uppercase text-on-surface-variant">Cantidad</label>
+              <div class="flex items-center border border-outline-variant rounded-md overflow-hidden">
+                <button type="button" data-qty-dec class="w-7 h-8 flex items-center justify-center text-on-surface-variant hover:bg-surface-container-low"><span class="material-symbols-outlined text-[16px]">remove</span></button>
+                <input data-qty type="number" min="0" step="1" value="1" class="w-12 h-8 text-center outline-none text-body-sm" />
+                <button type="button" data-qty-inc class="w-7 h-8 flex items-center justify-center text-on-surface-variant hover:bg-surface-container-low"><span class="material-symbols-outlined text-[16px]">add</span></button>
+              </div>
+            </div>
+            <div>
+              <label class="block text-[10px] font-label-bold uppercase text-on-surface-variant">Precio unitario</label>
+              <input data-price type="number" min="0" step="1000" placeholder="precio" class="w-28 h-8 px-2 border border-outline-variant rounded-md outline-none focus:border-outline text-body-sm text-right" />
+            </div>
+            <div>
+              <label class="block text-[10px] font-label-bold uppercase text-on-surface-variant">Desc. %</label>
+              <input data-discount type="number" min="0" max="100" step="1" value="0" class="w-16 h-8 px-2 border border-outline-variant rounded-md outline-none focus:border-outline text-body-sm text-right" />
+            </div>
+            <span class="text-[10px] px-1.5 py-1 rounded bg-surface-container-high text-on-surface-variant self-center">IVA 19%</span>
+            <div class="flex-1 text-right">
+              <label class="block text-[10px] font-label-bold uppercase text-on-surface-variant">Subtotal</label>
+              <p data-subtotal class="font-bold text-on-surface">${formatMoney(0)}</p>
+            </div>
+          </div>
+        </div>
+        <button type="button" data-del class="btn btn-icon shrink-0" aria-label="Quitar línea"><span class="material-symbols-outlined">delete</span></button>
+      </div>
+    `;
+
+    const search = row.querySelector('[data-prod-search]');
+    const hidden = row.querySelector('[data-prod]');
+    const results = row.querySelector('[data-prod-results]');
+    const description = row.querySelector('[data-description]');
+    const qty = row.querySelector('[data-qty]');
+    const price = row.querySelector('[data-price]');
+    const discountInput = row.querySelector('[data-discount]');
+    const subtotalCell = row.querySelector('[data-subtotal]');
+
+    function recalcRow() {
+      const q = Number(qty.value) || 0;
+      const p = price.value === '' ? Number(row.dataset.listPrice || 0) : Number(price.value);
+      const d = Math.min(100, Math.max(0, Number(discountInput.value) || 0));
+      subtotalCell.textContent = formatMoney(q * p * (1 - d / 100));
+      renderTotals();
+    }
+
+    function pick(p) {
+      hidden.value = p.id;
+      search.value = p.name;
+      row.dataset.listPrice = p.price || 0;
+      price.value = Math.round(p.price || 0) || '';
+      if (p.description && !description.value) description.value = p.description;
+      results.classList.add('hidden');
+      recalcRow();
+    }
+
+    // La fila vive en una lista que puede desplazarse en pantallas angostas
+    // -- por la regla CSS de que overflow-x/overflow-y quedan atados entre
+    // sí, un `position: absolute` que se salga del alto de la fila se
+    // recortaría. Con `position: fixed` y coordenadas calculadas a mano el
+    // desplegable se pinta sobre el viewport, fuera de ese recorte.
+    function showResults() {
+      const rect = search.getBoundingClientRect();
+      results.style.left = `${rect.left}px`;
+      results.style.top = `${rect.bottom + 4}px`;
+      results.style.width = `${rect.width}px`;
+      results.classList.remove('hidden');
+    }
+
+    let deb;
+    search.addEventListener('input', () => {
+      hidden.value = ''; // cambió el texto -> ya no hay producto del catálogo elegido hasta que pinche uno
+      clearTimeout(deb);
+      const term = search.value.trim();
+      if (term.length < 2) {
+        results.classList.add('hidden');
+        return;
+      }
+      deb = setTimeout(async () => {
+        let list2 = [];
+        try {
+          list2 = await ctx.api.get(`/api/products?q=${encodeURIComponent(term)}`);
+        } catch {
+          return;
+        }
+        if (!list2.length) {
+          results.innerHTML = '<p class="px-3 py-2 text-[11px] text-on-surface-variant">Sin resultados en la lista de precios — puedes dejar el nombre escrito y poner el precio a mano</p>';
+          showResults();
+          return;
+        }
+        results.innerHTML = list2
+          .slice(0, 30)
+          .map(
+            (p) =>
+              `<button type="button" data-pid="${p.id}" data-pname="${escapeHtml(p.name)}" data-pprice="${p.price || 0}" data-pdesc="${escapeHtml(p.description || '')}" class="w-full text-left px-3 py-1.5 hover:bg-surface-container-low text-body-sm flex justify-between gap-2"><span class="truncate">${escapeHtml(p.name)}</span>${p.price ? `<span class="shrink-0 text-on-surface-variant">${formatMoney(p.price)}</span>` : ''}</button>`
+          )
+          .join('');
+        showResults();
+      }, 250);
+    });
+    results.addEventListener('click', (e) => {
+      const b = e.target.closest('button[data-pid]');
+      if (!b) return;
+      pick({ id: Number(b.dataset.pid), name: b.dataset.pname, price: Number(b.dataset.pprice), description: b.dataset.pdesc });
+    });
+    search.addEventListener('blur', () => setTimeout(() => results.classList.add('hidden'), 150));
+    qty.addEventListener('input', recalcRow);
+    price.addEventListener('input', recalcRow);
+    discountInput.addEventListener('input', recalcRow);
+    row.querySelector('[data-qty-dec]').addEventListener('click', () => {
+      qty.value = Math.max(0, (Number(qty.value) || 0) - 1);
+      recalcRow();
+    });
+    row.querySelector('[data-qty-inc]').addEventListener('click', () => {
+      qty.value = (Number(qty.value) || 0) + 1;
+      recalcRow();
+    });
+    row.querySelector('[data-del]').addEventListener('click', () => {
+      row.remove();
+      renderTotals();
+    });
+    row.querySelector('[data-move-up]').addEventListener('click', () => moveRow(row, 'up'));
+    row.querySelector('[data-move-down]').addEventListener('click', () => moveRow(row, 'down'));
+
+    if (preset) {
+      if (preset.product_id) hidden.value = preset.product_id;
+      if (preset.product_name) search.value = preset.product_name;
+      if (preset.description) description.value = preset.description;
+      if (preset.qty != null) qty.value = preset.qty;
+      if (preset.price_unit != null) price.value = Math.round(preset.price_unit);
+      if (preset.discount_percent) discountInput.value = preset.discount_percent;
+    }
+
+    list.appendChild(row);
+    recalcRow();
+  }
+
+  // El nombre del producto es texto libre (no depende de tener un
+  // product_id del catálogo): asi una línea puede ser "Instalación" o
+  // cualquier cosa que no esté en la lista de precios, con el precio puesto
+  // a mano -- mismo criterio de "precios manuales" que ya usa el resto del CRM.
+  function readLines(list) {
+    return [...list.querySelectorAll('[data-line]')]
+      .map((row) => {
+        const prodInput = row.querySelector('[data-prod]');
+        if (!prodInput) return null;
+        const search = row.querySelector('[data-prod-search]');
+        const priceRaw = row.querySelector('[data-price]').value;
+        const listPrice = Number(row.dataset.listPrice || 0);
+        return {
+          product_id: Number(prodInput.value) || null,
+          product_name: search.value.trim(),
+          description: row.querySelector('[data-description]').value.trim() || null,
+          qty: Number(row.querySelector('[data-qty]').value) || 0,
+          price_unit: priceRaw === '' ? listPrice : Number(priceRaw),
+          discount_percent: Math.min(100, Math.max(0, Number(row.querySelector('[data-discount]').value) || 0)),
+        };
+      })
+      .filter((l) => l && l.product_name && l.qty > 0);
+  }
+
+  // ---- cliente: buscador + datos de facturación ------------------------------
+  function clientSection() {
+    const advisorField = lead
+      ? field('cz-advisor-ro', 'Vendedor', lead.advisor_name || 'Sin asignar', { readonly: true })
+      : ctx.user?.role !== 'asesor'
+        ? `<div>
+             <label class="block text-[10px] font-label-bold uppercase tracking-wide text-on-surface-variant mb-1">Asesor *</label>
+             <select id="cz-advisor" class="w-full p-2 border border-outline-variant rounded-md outline-none focus:border-outline focus:ring-2 focus:ring-outline/20 text-body-sm">
+               ${advisorsCache.map((a) => `<option value="${a.id}">${escapeHtml(a.name)}</option>`).join('')}
+             </select>
+           </div>`
+        : `<div class="md:col-span-3 flex items-center gap-1.5 text-[11px] text-tertiary"><span class="material-symbols-outlined text-[14px]">info</span>Cliente nuevo: solo coordinador/admin puede registrarlo. Busca uno que ya exista.</div>`;
+
+    return `
+      <div class="p-5 border-b border-outline-variant">
+        <div class="flex items-center justify-between gap-3 mb-3">
+          <div class="flex items-center gap-1.5">
+            <span class="material-symbols-outlined text-[18px] text-on-surface-variant">person</span>
+            <h3 class="text-label-bold font-label-bold uppercase tracking-wide text-on-surface-variant">Cliente</h3>
+          </div>
+          ${lead ? `<button type="button" id="cz-change" class="btn btn-ghost text-[11px]"><span class="material-symbols-outlined">swap_horiz</span>Cambiar cliente</button>` : ''}
+        </div>
+        ${
+          !lead
+            ? `<div class="relative max-w-lg mb-3">
+                 <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-[18px] text-on-surface-variant pointer-events-none">search</span>
+                 <input id="cz-search" type="text" autocomplete="off" placeholder="Buscar cliente existente por nombre, teléfono o documento…" class="w-full pl-10 pr-3 py-2.5 border border-outline-variant rounded-md outline-none focus:border-outline focus:ring-2 focus:ring-outline/20" />
+                 <div id="cz-results" class="hidden absolute z-20 mt-1 w-full bg-surface border border-outline-variant rounded-md shadow-lg max-h-72 overflow-y-auto"></div>
+               </div>
+               <p class="text-[11px] text-on-surface-variant mb-3">¿No aparece? Llena los datos de abajo para registrarlo.</p>`
+            : ''
+        }
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+          ${field('cz-name', 'Nombre', lead?.client_name, { required: true })}
+          ${field('cz-phone', 'Teléfono', lead?.phone, { required: true, type: 'tel' })}
+          ${field('cz-document', 'NIT / Documento', lead?.document)}
+          ${field('cz-email', 'Correo', lead?.email, { type: 'email' })}
+          ${field('cz-address', 'Dirección', lead?.address)}
+          ${field('cz-city', 'Ciudad', lead?.city)}
+          ${field('cz-product', 'Producto de interés', lead?.product)}
+          ${advisorField}
+        </div>
+      </div>
+    `;
+  }
+
+  function wireClientSection() {
+    root.querySelector('#cz-change')?.addEventListener('click', resetAll);
+    const search = root.querySelector('#cz-search');
+    const results = root.querySelector('#cz-results');
+    if (!search) return;
+    let deb;
+    search.addEventListener('input', () => {
+      clearTimeout(deb);
+      const term = search.value.trim();
+      if (term.length < 2) {
+        results.classList.add('hidden');
+        return;
+      }
+      deb = setTimeout(async () => {
+        let list = [];
+        try {
+          list = await ctx.api.get(`/api/leads?q=${encodeURIComponent(term)}`);
+        } catch {
+          return;
+        }
+        if (!list.length) {
+          results.innerHTML = '<p class="px-3 py-2 text-[11px] text-on-surface-variant">Sin resultados — llena los datos de abajo para registrarlo</p>';
+          results.classList.remove('hidden');
+          return;
+        }
+        results.innerHTML = list
+          .slice(0, 20)
+          .map(
+            (l) => `<button type="button" data-id="${l.id}" class="w-full text-left px-3 py-2 hover:bg-surface-container-low transition-colors flex items-center gap-2.5">
+              <span class="w-8 h-8 rounded-full bg-primary-container text-on-primary-container flex items-center justify-center text-[11px] font-bold shrink-0">${escapeHtml(initials(l.client_name))}</span>
+              <span class="min-w-0">
+                <span class="block text-body-sm font-bold text-on-surface truncate">${escapeHtml(l.client_name)}</span>
+                <span class="block text-[11px] text-on-surface-variant truncate">${escapeHtml(l.phone || '')}${l.product ? ' · ' + escapeHtml(l.product) : ''}${l.advisor_name ? ' · ' + escapeHtml(l.advisor_name) : ''}</span>
+              </span>
+            </button>`
+          )
+          .join('');
+        results.classList.remove('hidden');
+      }, 250);
+    });
+    results.addEventListener('click', async (e) => {
+      const btn = e.target.closest('button[data-id]');
+      if (!btn) return;
+      results.classList.add('hidden');
+      try {
+        lead = await ctx.api.get(`/api/leads/${btn.dataset.id}`);
+      } catch (err) {
+        ctx.toast(err.message, 'error');
+        return;
+      }
+      await refreshHistory();
+      render();
+    });
+  }
+
+  // Cierra el desplegable de resultados al hacer clic afuera -- un solo
+  // listener en document (no uno por cada render) para no acumularlos; se
+  // limpia al desmontar la vista.
+  function onDocClick(e) {
+    const search = root.querySelector('#cz-search');
+    const results = root.querySelector('#cz-results');
+    if (!search || !results) return;
+    if (!search.contains(e.target) && !results.contains(e.target)) results.classList.add('hidden');
+  }
+  document.addEventListener('click', onDocClick);
+
+  // ---- pantalla completa (una sola, siempre) ---------------------------------
+  function render() {
+    const editable = isEditable();
+    const hasQuotation = !!quotation;
+    const badgeCls = hasQuotation ? STATE_BADGE[quotation.state] || STATE_BADGE.draft : STATE_BADGE.draft;
+    const badgeLabel = hasQuotation ? STATE_LABEL[quotation.state] || quotation.state : lead ? 'Nueva' : 'Sin cliente';
+    const expiresIn = hasQuotation ? daysUntil(quotation.validity_date) : null;
+
+    root.innerHTML = `
+      <div class="flex items-center justify-between flex-wrap gap-3 mb-4">
+        <div class="flex items-center gap-2 text-body-sm text-on-surface-variant min-w-0">
+          <span class="font-bold text-on-surface truncate">${hasQuotation ? escapeHtml(quotation.number) : 'Cotizar'}</span>
+          <span class="px-2 py-0.5 rounded text-[10px] font-bold shrink-0 ${badgeCls}">${badgeLabel}</span>
+        </div>
+        <div class="flex flex-wrap gap-2" id="cz-actions"></div>
+      </div>
+
+      <div class="bg-surface rounded-xl border border-outline-variant shadow-sm overflow-hidden">
+        <div class="h-1.5 bg-primary"></div>
+
+        ${clientSection()}
+
+        ${
+          hasQuotation
+            ? `<div class="p-5 border-b border-outline-variant flex items-center justify-between flex-wrap gap-3">
+                 ${statusStepper()}
+                 <div class="flex items-center gap-4 text-[12px] text-on-surface-variant">
+                   <span class="flex items-center gap-1"><span class="material-symbols-outlined text-[15px]">format_list_numbered</span><span id="cz-line-count">${quotation.lines.length}</span> líneas</span>
+                   ${
+                     expiresIn !== null
+                       ? `<span class="flex items-center gap-1 ${expiresIn < 0 ? 'text-error font-bold' : expiresIn <= 2 ? 'text-tertiary font-bold' : ''}"><span class="material-symbols-outlined text-[15px]">schedule</span>${expiresIn < 0 ? 'Vencida' : expiresIn === 0 ? 'Vence hoy' : `Vence en ${expiresIn}d`}</span>`
+                       : ''
+                   }
+                 </div>
+               </div>`
+            : ''
+        }
+
+        ${historyStrip()}
+
+        <div class="p-5 border-b border-outline-variant">
+          <div class="flex items-center justify-between flex-wrap gap-3 mb-3">
+            <div class="flex items-center gap-1.5">
+              <span class="material-symbols-outlined text-[18px] text-on-surface-variant">inventory_2</span>
+              <h3 class="text-label-bold font-label-bold uppercase tracking-wide text-on-surface-variant">Productos</h3>
+            </div>
+            ${
+              !hasQuotation
+                ? `<div class="flex items-center gap-1.5">
+                     <label class="text-[11px] text-on-surface-variant">Válida por</label>
+                     <input id="cz-validity" type="number" min="1" value="8" class="w-14 p-1 border border-outline-variant rounded-md outline-none focus:border-outline text-body-sm" />
+                     <span class="text-[11px] text-on-surface-variant">días · vence <span id="cz-validity-date">${fmtDate(addDaysIso(8))}</span></span>
+                   </div>`
+                : `<span class="text-[11px] text-on-surface-variant flex items-center gap-1"><span class="material-symbols-outlined text-[14px]">event_available</span>Válida hasta ${fmtDate(quotation.validity_date)}</span>`
+            }
+          </div>
+          <div id="cz-lines"></div>
+          ${editable ? `<button type="button" id="cz-add-line" class="btn btn-ghost mt-1 text-[12px]"><span class="material-symbols-outlined">add</span>Agregar un producto</button>` : ''}
+        </div>
+
+        ${
+          !hasQuotation
+            ? `<div class="p-5 border-b border-outline-variant">
+                 <label class="block text-label-bold font-label-bold uppercase tracking-wide text-on-surface-variant mb-1">Notas / términos</label>
+                 <textarea id="cz-note" rows="2" placeholder="Opcional — se incluye en el PDF de la cotización" class="w-full p-2.5 border border-outline-variant rounded-md outline-none focus:border-outline focus:ring-2 focus:ring-outline/20"></textarea>
+               </div>`
+            : ''
+        }
+
+        <div class="p-5 flex justify-end">
+          <div id="cz-totals" class="w-full max-w-xs"></div>
+        </div>
+      </div>
+    `;
+
+    wireClientSection();
+    root.querySelector('#cz-validity')?.addEventListener('input', (e) => {
+      const days = Number(e.target.value) || 0;
+      const hint = root.querySelector('#cz-validity-date');
+      if (hint) hint.textContent = days > 0 ? fmtDate(addDaysIso(days)) : '—';
+      renderTotals();
+    });
+    root.querySelectorAll('[data-hist]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        await refreshHistory(Number(btn.dataset.hist));
+        render();
+      });
+    });
+
+    const list = root.querySelector('#cz-lines');
+    if (hasQuotation) {
+      quotation.lines.forEach((l) => appendLineRow(list, l, editable));
+    } else {
+      appendLineRow(list, null, true);
+    }
+    root.querySelector('#cz-add-line')?.addEventListener('click', () => appendLineRow(list, null, true));
+
+    renderTotals();
+    renderActions();
+  }
+
+  function renderActions() {
+    const actionsEl = root.querySelector('#cz-actions');
+    if (!actionsEl) return;
+    const editable = isEditable();
+    const buttons = [];
+    if (editable) {
+      const label = quotation ? 'Guardar cambios' : lead ? 'Guardar cotización' : 'Registrar y cotizar';
+      buttons.push(`<button type="button" id="cz-save" class="btn btn-primary">${label}</button>`);
+    }
+    if (quotation && quotation.state === 'draft') {
+      buttons.push(`<button type="button" id="cz-send" class="btn btn-secondary">Marcar como enviada</button>`);
+    }
+    if (quotation) {
+      buttons.push(
+        `<a href="/api/quotations/${quotation.id}/pdf" target="_blank" rel="noopener" class="btn btn-secondary inline-flex"><span class="material-symbols-outlined">picture_as_pdf</span>PDF</a>`
+      );
+      buttons.push(`<button type="button" id="cz-whatsapp" class="btn btn-secondary"><span class="material-symbols-outlined">chat</span>WhatsApp</button>`);
+      buttons.push(`<button type="button" id="cz-duplicate" class="btn btn-secondary"><span class="material-symbols-outlined">content_copy</span>Duplicar</button>`);
+    }
+    if (quotation && quotation.state !== 'sale' && quotation.state !== 'cancel') {
+      buttons.push(`<button type="button" id="cz-confirm" class="btn btn-secondary">Confirmar venta</button>`);
+    }
+    actionsEl.innerHTML = buttons.join('');
+
+    actionsEl.querySelector('#cz-save')?.addEventListener('click', save);
+    actionsEl.querySelector('#cz-send')?.addEventListener('click', markSent);
+    actionsEl.querySelector('#cz-duplicate')?.addEventListener('click', duplicateQuotation);
+    actionsEl.querySelector('#cz-whatsapp')?.addEventListener('click', sendWhatsApp);
+    actionsEl.querySelector('#cz-confirm')?.addEventListener('click', () => {
+      openCloseModal(lead, ctx, async () => {
+        try {
+          await ctx.api.post(`/api/quotations/${quotation.id}/confirm`);
+        } catch {
+          /* el lead ya quedo cerrado en el CRM aunque esto falle; no es bloqueante */
+        }
+        await refreshHistory(quotation.id);
+        render();
+      });
+    });
+  }
+
+  // Abre WhatsApp Web/app con el chat del cliente y un mensaje ya escrito --
+  // WhatsApp no deja adjuntar un archivo por URL, así que el mensaje le pide
+  // adjuntar el PDF descargado (o compartirlo el asesor manualmente).
+  function sendWhatsApp() {
+    const digits = (lead.phone || '').replace(/\D/g, '');
+    if (!digits) {
+      ctx.toast('Este cliente no tiene teléfono registrado', 'error');
+      return;
+    }
+    const phone = digits.length === 10 ? `57${digits}` : digits; // 10 dígitos = celular colombiano sin indicativo
+    const text = `Hola ${lead.client_name}, te comparto la cotización ${quotation.number} por ${formatMoney(quotation.amount_total)}. Te adjunto el PDF a continuación.`;
+    window.open(`https://wa.me/${phone}?text=${encodeURIComponent(text)}`, '_blank', 'noopener');
+  }
+
+  async function duplicateQuotation() {
+    const btn = root.querySelector('#cz-duplicate');
+    btn.disabled = true;
+    try {
+      const r = await ctx.api.post(`/api/quotations/${quotation.id}/duplicate`);
+      ctx.toast(`Cotización duplicada como ${r.quotation.number}`, 'success');
+      await refreshHistory(r.quotation.id);
+      render();
+    } catch (err) {
+      ctx.toast(err.message, 'error');
+      btn.disabled = false;
+    }
+  }
+
+  // Un solo botón hace todo: si el cliente es nuevo lo crea (o actualiza sus
+  // datos si ya existía) y crea/actualiza la cotización -- así la búsqueda y
+  // el formulario de cotización quedan en una sola pantalla, un solo guardado.
+  async function save() {
+    const name = root.querySelector('#cz-name').value.trim();
+    const phone = root.querySelector('#cz-phone').value.trim();
+    if (!name || !phone) {
+      ctx.toast('Nombre y teléfono son obligatorios', 'error');
+      return;
+    }
+    const list = root.querySelector('#cz-lines');
+    const lines = readLines(list);
+    if (!lines.length) {
+      ctx.toast('Agrega al menos un producto con cantidad', 'error');
+      return;
+    }
+    const fields = {
+      client_name: name,
+      phone,
+      document: root.querySelector('#cz-document').value.trim(),
+      email: root.querySelector('#cz-email').value.trim(),
+      address: root.querySelector('#cz-address').value.trim(),
+      city: root.querySelector('#cz-city').value.trim(),
+      product: root.querySelector('#cz-product').value.trim(),
+    };
+
+    const btn = root.querySelector('#cz-save');
+    btn.disabled = true;
+    btn.setAttribute('data-loading', '');
+    try {
+      if (!lead) {
+        const advisorSelect = root.querySelector('#cz-advisor');
+        if (ctx.user?.role !== 'asesor' && !advisorSelect?.value) {
+          ctx.toast('Selecciona un asesor', 'error');
+          btn.disabled = false;
+          btn.removeAttribute('data-loading');
+          return;
+        }
+        lead = await ctx.api.post('/api/leads', { ...fields, advisor_id: advisorSelect?.value });
+        ctx.toast('Cliente registrado', 'success');
+      } else {
+        lead = await ctx.api.patch(`/api/leads/${lead.id}`, fields);
+      }
+
+      let r;
+      if (quotation) {
+        r = await ctx.api.put(`/api/quotations/${quotation.id}`, { lines });
+        ctx.toast('Cotización actualizada', 'success');
+      } else {
+        const validity_days = Number(root.querySelector('#cz-validity')?.value) || 8;
+        const note = root.querySelector('#cz-note')?.value.trim() || undefined;
+        r = await ctx.api.post(`/api/leads/${lead.id}/quotations`, { lines, validity_days, note });
+        ctx.toast('Cotización creada', 'success');
+      }
+      await refreshHistory(r.quotation.id);
+      render();
+    } catch (err) {
+      ctx.toast(err.message, 'error');
+      btn.disabled = false;
+      btn.removeAttribute('data-loading');
+    }
+  }
+
+  async function markSent() {
+    const btn = root.querySelector('#cz-send');
+    btn.disabled = true;
+    btn.setAttribute('data-loading', '');
+    try {
+      await ctx.api.post(`/api/quotations/${quotation.id}/send`);
+      ctx.toast('Cotización marcada como enviada', 'success');
+      await refreshHistory(quotation.id);
+      render();
+    } catch (err) {
+      ctx.toast(err.message, 'error');
+      btn.disabled = false;
+      btn.removeAttribute('data-loading');
+    }
+  }
+
+  // Deep-link opcional: #/cotizar?lead=123 abre directo esa cotización.
+  const presetLeadId = ctx.routeParams.get('lead');
+  if (presetLeadId) {
+    try {
+      lead = await ctx.api.get(`/api/leads/${presetLeadId}`);
+      await refreshHistory();
+    } catch {
+      lead = null;
+    }
+  }
+  render();
+
+  return () => {
+    document.removeEventListener('click', onDocClick);
+  };
+}

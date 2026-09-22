@@ -1,5 +1,6 @@
 import { escapeHtml } from '../utils.js';
 import { openModal } from './modal.js';
+import { dateFieldHtml } from './leadActions.js';
 
 // Venta rapida: para cuando no hay tiempo de pasar por el flujo completo de
 // Ventas. Busca un cliente existente (mismo autocompletado que Alta Rapida
@@ -42,6 +43,7 @@ export function openQuickSaleModal(ctx, onDone) {
             <label class="block text-label-bold font-label-bold text-on-surface-variant mb-1 uppercase tracking-wider">Monto vendido *</label>
             <input id="qs-monto" required type="number" min="1" step="1" placeholder="Ej. 850000" class="w-full p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md focus:border-outline focus:ring-2 focus:ring-outline/20 outline-none transition-all" />
           </div>
+          ${dateFieldHtml('qs-fecha', 'Fecha y hora del cierre')}
           <div class="flex justify-end gap-2 pt-2">
             <button type="button" id="qs-cancel" class="px-4 py-2 rounded-lg border border-outline-variant text-on-surface hover:bg-surface-container-low">Cancelar</button>
             <button type="submit" id="qs-submit" class="px-4 py-2 rounded-lg bg-primary text-on-primary font-bold hover:opacity-90 transition-colors flex items-center gap-2">
@@ -61,6 +63,7 @@ export function openQuickSaleModal(ctx, onDone) {
       const asesorSelect = body.querySelector('#qs-asesor');
       const referenciaInput = body.querySelector('#qs-referencia');
       const montoInput = body.querySelector('#qs-monto');
+      const fechaInput = body.querySelector('#qs-fecha');
       const submitBtn = body.querySelector('#qs-submit');
 
       let advisors = [];
@@ -180,13 +183,14 @@ export function openQuickSaleModal(ctx, onDone) {
         }
 
         const sale_reference = referenciaInput.value.trim() || undefined;
+        const at = fechaInput.value;
 
         submitBtn.disabled = true;
         submitBtn.classList.add('opacity-60', 'cursor-not-allowed');
         try {
           let closedLead;
           if (selectedOpenLead) {
-            closedLead = await ctx.api.post(`/api/leads/${selectedOpenLead.id}/close`, { result: 'ganado', amount, sale_reference });
+            closedLead = await ctx.api.post(`/api/leads/${selectedOpenLead.id}/close`, { result: 'ganado', amount, sale_reference, at });
           } else {
             const client = selectedClient || (await ctx.api.post('/api/clients', { name }));
             const newLead = await ctx.api.post('/api/leads', {
@@ -194,8 +198,13 @@ export function openQuickSaleModal(ctx, onDone) {
               phone: client.phone || 'Sin dato',
               advisor_id: asesorSelect.value,
               client_id: client.id,
+              // Misma fecha que el cierre: si se esta registrando una venta
+              // atrasada (ver "at" abajo), el lead nuevo tiene que "nacer" ese
+              // mismo dia -- si no, /close la rechaza por "anterior al
+              // registro" (el lead quedaria creado hoy pero cerrado antes).
+              created_at: at,
             });
-            closedLead = await ctx.api.post(`/api/leads/${newLead.id}/close`, { result: 'ganado', amount, sale_reference });
+            closedLead = await ctx.api.post(`/api/leads/${newLead.id}/close`, { result: 'ganado', amount, sale_reference, at });
           }
           ctx.toast(`Venta registrada — ${closedLead.client_name}`, 'success');
           close();

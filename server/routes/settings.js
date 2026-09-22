@@ -4,7 +4,22 @@ const { broadcast } = require('../realtime');
 
 const router = express.Router();
 
-const PUBLIC_KEYS = ['auto_backup_weekly', 'last_backup_at', 'monthly_sales_target'];
+const PUBLIC_KEYS = [
+  'auto_backup_weekly',
+  'last_backup_at',
+  'monthly_sales_target',
+  // Datos de la empresa para el PDF de cotización (pestaña "Cotizar", motor
+  // nativo -- ver server/nativeQuotes.js). Editables aquí para no tener que
+  // tocar código cada vez que cambien un dato de facturación. Sus valores
+  // por defecto se siembran en db.js -> init() (ensureDefaultSetting).
+  'quote_company_name',
+  'quote_company_nit',
+  'quote_company_address',
+  'quote_company_phone',
+  'quote_company_email',
+  'quote_payment_details',
+  'quote_terms',
+];
 
 router.get('/', async (req, res) => {
   const rows = await db.prepare('SELECT key, value FROM settings').all();

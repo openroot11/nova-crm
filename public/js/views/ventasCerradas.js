@@ -1,7 +1,7 @@
-import { escapeHtml, formatMoney, copyNameBtn, bindCopyButtons } from '../utils.js';
+import { escapeHtml, formatMoney, copyNameBtn, bindCopyButtons, saleReferenceBadge } from '../utils.js';
 import { barChart, destroyChart, CATEGORICAL_COLORS } from '../components/charts.js';
 import { openQuickSaleModal } from '../components/quickSaleModal.js';
-import { openEditLeadModal } from '../components/leadActions.js';
+import { openEditLeadModal, deleteLead } from '../components/leadActions.js';
 import { kpiTile } from '../components/kpiTile.js';
 
 const PAGE_SIZE = 50;
@@ -81,6 +81,7 @@ export async function mount(container, ctx) {
         <table class="w-full text-left border-collapse">
           <thead class="bg-surface-container-high border-b border-outline-variant">
             <tr>
+              <th class="p-table-cell-padding text-label-bold font-label-bold text-on-surface-variant uppercase whitespace-nowrap text-right">#</th>
               <th class="p-table-cell-padding text-label-bold font-label-bold text-on-surface-variant uppercase whitespace-nowrap">Cliente</th>
               <th class="p-table-cell-padding text-label-bold font-label-bold text-on-surface-variant uppercase whitespace-nowrap">Asesor</th>
               <th class="p-table-cell-padding text-label-bold font-label-bold text-on-surface-variant uppercase whitespace-nowrap">Producto</th>
@@ -189,23 +190,53 @@ export async function mount(container, ctx) {
   // visible en la ficha del cliente.
   function origenCellHtml(lead) {
     const isAds = lead.channel_detail === 'Google Ads';
-    return `<span class="px-2 py-0.5 rounded-full text-[11px] font-label-bold ${isAds ? 'bg-primary-container text-on-primary-container' : 'bg-surface-container-high text-on-surface-variant'}">${escapeHtml(lead.channel_detail || 'Sin definir')}</span>`;
+    // Verde propio (no el "secondary" azul de VENDIDO/PED, ni el rojo de
+    // marca) para que la etiqueta de Ads no se confunda con ningun otro
+    // badge de esta misma fila.
+    return `<span class="px-2 py-0.5 rounded-full text-[11px] font-label-bold ${isAds ? 'bg-[#e3f5ec] text-[#0f7a4d]' : 'bg-surface-container-high text-on-surface-variant'}">${escapeHtml(lead.channel_detail || 'Sin definir')}</span>`;
   }
 
-  function rowHtml(lead) {
+  // Verde cuando ya se actualizo a "PED..." (facturado/pagado); naranja
+  // mientras siga como "S0..." (solo la cotizacion confirmada en Odoo), para
+  // que salte a la vista que a esa venta le falta el cambio.
+  function referenciaCellHtml(lead) {
+    const badge = saleReferenceBadge(lead.sale_reference);
+    const isPed = /^PED/i.test((lead.sale_reference || '').trim());
+    const title = !lead.sale_reference
+      ? ''
+      : isPed
+        ? 'Pedido facturado/pagado'
+        : 'Todavía es la cotización de Odoo — falta cambiarla a PED cuando se facture/pague';
+    return `<span class="inline-flex px-2 py-0.5 rounded-full text-[11px] font-mono font-bold ${badge.badgeClass}" title="${escapeHtml(title)}">${escapeHtml(badge.label)}</span>`;
+  }
+
+  // Borrar una venta solo lo puede hacer coordinador/admin -- mismo criterio
+  // que el backend (DELETE /api/leads/:id) y que el boton "Eliminar" del
+  // kanban.
+  const canDelete = ctx.user?.role !== 'asesor';
+
+  function rowHtml(lead, n) {
     return `
       <tr class="hover:bg-surface-container-low transition-colors">
+        <td class="p-table-cell-padding text-right text-on-surface-variant">${n}</td>
         <td class="p-table-cell-padding font-bold">${clientCellHtml(lead)}</td>
         <td class="p-table-cell-padding text-on-surface-variant">${escapeHtml(lead.advisor_name || '—')}</td>
         <td class="p-table-cell-padding text-on-surface-variant">${escapeHtml(lead.product || '—')}</td>
         <td class="p-table-cell-padding">${origenCellHtml(lead)}</td>
-        <td class="p-table-cell-padding text-on-surface-variant font-mono text-[12px]">${escapeHtml(lead.sale_reference || '—')}</td>
+        <td class="p-table-cell-padding">${referenciaCellHtml(lead)}</td>
         <td class="p-table-cell-padding text-right font-bold text-secondary">${formatMoney(lead.amount || 0)}</td>
         <td class="p-table-cell-padding text-on-surface-variant">${fechaLabel(lead.closed_at)}</td>
-        <td class="p-table-cell-padding text-right">
+        <td class="p-table-cell-padding text-right whitespace-nowrap">
           <button data-action="edit-sale" data-id="${lead.id}" class="text-on-surface-variant hover:text-on-surface p-1" title="Editar venta">
             <span class="material-symbols-outlined text-[18px]">edit</span>
           </button>
+          ${
+            canDelete
+              ? `<button data-action="delete-sale" data-id="${lead.id}" class="text-error/70 hover:text-error p-1" title="Eliminar venta">
+                   <span class="material-symbols-outlined text-[18px]">delete</span>
+                 </button>`
+              : ''
+          }
         </td>
       </tr>`;
   }
@@ -214,8 +245,8 @@ export async function mount(container, ctx) {
     const filtered = visibleVentas();
     const shown = filtered.slice(0, visibleCount);
     tbody.innerHTML = shown.length
-      ? shown.map(rowHtml).join('')
-      : `<tr><td colspan="8" class="p-table-cell-padding py-10 text-center text-body-sm text-on-surface-variant">${searchQuery ? 'Sin ventas que coincidan con la búsqueda.' : 'Sin ventas cerradas en este rango.'}</td></tr>`;
+      ? shown.map((lead, i) => rowHtml(lead, i + 1)).join('')
+      : `<tr><td colspan="9" class="p-table-cell-padding py-10 text-center text-body-sm text-on-surface-variant">${searchQuery ? 'Sin ventas que coincidan con la búsqueda.' : 'Sin ventas cerradas en este rango.'}</td></tr>`;
     bindCopyButtons(tbody, ctx);
     countBadge.textContent = `${filtered.length} venta${filtered.length === 1 ? '' : 's'}`;
     const remaining = filtered.length - shown.length;
@@ -337,6 +368,12 @@ export async function mount(container, ctx) {
     if (editBtn) {
       const lead = ventas.find((l) => l.id === Number(editBtn.dataset.id));
       if (lead) openEditLeadModal(lead, ctx, loadAll);
+      return;
+    }
+    const deleteBtn = e.target.closest('button[data-action="delete-sale"]');
+    if (deleteBtn) {
+      const lead = ventas.find((l) => l.id === Number(deleteBtn.dataset.id));
+      if (lead) deleteLead(lead, ctx, loadAll);
     }
   });
 

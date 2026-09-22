@@ -1,5 +1,6 @@
 const { db } = require('./db');
 const sla = require('./sla');
+const holidays = require('./holidays');
 
 // Todo lo que se calcula aqui alimenta pantallas del programa (Estadisticas,
 // Dashboard, Informe archivado) -- lee de "leads_visible" (solo Google Ads,
@@ -12,6 +13,16 @@ function pct(numerator, denominator) {
   if (!denominator) return 0;
   return Math.round((numerator / denominator) * 1000) / 10;
 }
+
+// Igual que pct() pero con 2 decimales -- para las cifras del embudo y del
+// "% que representa la inversión sobre las ventas", que el reporte de
+// gerencia muestra con 2 decimales (26,70% / 21,42% / 11,43%).
+function pct2(numerator, denominator) {
+  if (!denominator) return 0;
+  return Math.round((numerator / denominator) * 10000) / 100;
+}
+
+const round1 = (n) => Math.round(n * 10) / 10;
 
 function monthRangeDefaults() {
   const now = new Date();
@@ -670,6 +681,279 @@ async function computeForecast(horizonInput, intervalInput) {
   };
 }
 
+/**
+ * Promedios por día de la semana dentro del rango, para las 3 gráficas de
+ * barras "Promedios por día" del reporte de gerencia:
+ *  - Leads INGRESADOS  = mensajes/llamadas anotados a mano en Informe
+ *    (informe_canales) -- el total "crudo" que entra al negocio.
+ *  - Leads ASIGNADOS   = leads reales creados en el CRM (solo Google Ads).
+ *  - VENTAS            = leads cerrados ganados.
+ *
+ * "Ingresados" se promedia solo entre los días de ese día-de-semana que
+ * tienen registro en Informe (un lunes sin registrar no cuenta ni como 0 ni
+ * como dato); "asignados" y "ventas" se promedian entre TODAS las
+ * ocurrencias del día en el rango, porque un día sin leads es un 0 real que
+ * el CRM sí conoce.
+ */
+async function computeWeekdayAverages(fromInput, toInput) {
+  const defaults = monthRangeDefaults();
+  const from = fromInput || defaults.from;
+  const to = toInput || defaults.to;
+
+  const fromD = new Date(`${from}T00:00:00Z`);
+  const toD = new Date(`${to}T00:00:00Z`);
+  // Índice 0 = lunes ... 6 = domingo.
+  const weekdayIdx = (dateLike) => (new Date(dateLike).getUTCDay() + 6) % 7;
+
+  const occ = [0, 0, 0, 0, 0, 0, 0];
+  for (let d = new Date(fromD); d <= toD; d = new Date(d.getTime() + 86400000)) {
+    occ[weekdayIdx(d)] += 1;
+  }
+
+  const canalesRows = await db
+    .prepare('SELECT fecha, (whatsapp + correo + llamadas) AS total FROM informe_canales WHERE fecha >= ? AND fecha <= ?')
+    .all(from, to);
+  const asignadosRows = await db
+    .prepare("SELECT substr(created_at, 1, 10) AS fecha, COUNT(*) AS total FROM leads_visible WHERE created_at >= ? AND created_at <= ? GROUP BY fecha")
+    .all(`${from} 00:00:00`, `${to} 23:59:59`);
+  const ventasRows = await db
+    .prepare("SELECT substr(closed_at, 1, 10) AS fecha, COUNT(*) AS total FROM leads_visible WHERE status = 'cerrado_ganado' AND closed_at >= ? AND closed_at <= ? GROUP BY fecha")
+    .all(`${from} 00:00:00`, `${to} 23:59:59`);
+
+  const sumIngresados = [0, 0, 0, 0, 0, 0, 0];
+  const diasConRegistro = [0, 0, 0, 0, 0, 0, 0];
+  const sumAsignados = [0, 0, 0, 0, 0, 0, 0];
+  const sumVentas = [0, 0, 0, 0, 0, 0, 0];
+
+  for (const r of canalesRows) {
+    const wi = weekdayIdx(`${r.fecha}T00:00:00Z`);
+    sumIngresados[wi] += r.total;
+    diasConRegistro[wi] += 1;
+  }
+  for (const r of asignadosRows) sumAsignados[weekdayIdx(`${r.fecha}T00:00:00Z`)] += r.total;
+  for (const r of ventasRows) sumVentas[weekdayIdx(`${r.fecha}T00:00:00Z`)] += r.total;
+
+  const LABELS = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
+  const avg = (sum, n) => (n ? Math.round((sum / n) * 10) / 10 : 0);
+
+  return LABELS.map((label, i) => ({
+    weekday: i + 1,
+    label,
+    ocurrencias: occ[i],
+    ingresados: avg(sumIngresados[i], diasConRegistro[i]),
+    asignados: avg(sumAsignados[i], occ[i]),
+    ventas: avg(sumVentas[i], occ[i]),
+  }));
+}
+
+// Apreciaciones (positivas) y observaciones (a mejorar) sugeridas para un
+// asesor, comparando sus métricas del periodo contra el periodo anterior.
+// Son SUGERENCIAS: el reporte de gerencia las deja editar antes de archivar.
+function buildAdvisorNotes(cur, prev) {
+  const apreciaciones = [];
+  const observaciones = [];
+
+  // Con muy pocos leads en el periodo cualquier variación es ruido (un solo
+  // lead mueve las tasas 100 puntos): mejor no sugerir nada y dejar que
+  // gerencia lo escriba a mano.
+  if ((cur.asignados || 0) < 5) return { apreciaciones, observaciones };
+
+  if (!prev) {
+    if (cur.tasa_cierre >= 12) apreciaciones.push('Buena tasa de cierre en el periodo');
+    if (cur.sla_cumplimiento >= 85) apreciaciones.push('Cumplió el SLA de primer contacto');
+    if (cur.asignados >= 40 && cur.tasa_contacto >= 60) apreciaciones.push('Buena administración de un gran flujo de leads');
+    if (cur.pendientes_por_cotizar > cur.cotizados) observaciones.push('Varios leads quedaron sin cotizar');
+    if (cur.tasa_reasignados >= 15) observaciones.push('Tasa de reasignación alta');
+    return { apreciaciones: apreciaciones.slice(0, 4), observaciones: observaciones.slice(0, 4) };
+  }
+
+  const PP = 1.5; // umbral en puntos porcentuales para tratar un cambio como real
+  const delta = (key) => (cur[key] || 0) - (prev[key] || 0);
+
+  if (delta('tasa_contacto') >= PP) apreciaciones.push('AUMENTÓ la tasa de respuesta');
+  else if (delta('tasa_contacto') <= -PP) observaciones.push('BAJÓ la tasa de respuesta');
+
+  if (delta('tasa_cierre') >= PP) apreciaciones.push('SUBIÓ la tasa de cierre');
+  else if (delta('tasa_cierre') <= -PP) observaciones.push('BAJÓ la tasa de cierre');
+
+  if (delta('tasa_reasignados') >= PP) observaciones.push('AUMENTÓ la reasignación de leads');
+  else if (delta('tasa_reasignados') <= -PP) apreciaciones.push('BAJÓ la reasignación de leads');
+
+  if (delta('cotizados_sobre_asignados') >= PP) apreciaciones.push('Cotizó una mayor parte de sus leads');
+  else if (delta('cotizados_sobre_asignados') <= -PP) observaciones.push('Cotizó una menor parte de sus leads');
+
+  if (delta('prom_semanal_sin_cotizar') >= 1) observaciones.push('AUMENTÓ el represamiento de leads sin cotizar');
+  else if (delta('prom_semanal_sin_cotizar') <= -1) apreciaciones.push('BAJÓ el represamiento de leads sin cotizar');
+
+  const ticketCur = cur.vendidos ? cur.monto_vendido / cur.vendidos : 0;
+  const ticketPrev = prev.vendidos ? prev.monto_vendido / prev.vendidos : 0;
+  if (ticketPrev && ticketCur >= ticketPrev * 1.1) apreciaciones.push('SUBIÓ el ticket promedio de venta');
+  else if (ticketPrev && ticketCur > 0 && ticketCur <= ticketPrev * 0.9) observaciones.push('BAJÓ el ticket promedio de venta');
+
+  if (cur.monto_vendido > prev.monto_vendido) apreciaciones.push('CRECIÓ el monto vendido');
+  else if (prev.monto_vendido > 0 && cur.monto_vendido < prev.monto_vendido) observaciones.push('CAYÓ el monto vendido');
+
+  if (cur.asignados >= 40 && cur.tasa_contacto >= 60) apreciaciones.push('Buena administración de un gran flujo de leads');
+
+  return {
+    apreciaciones: [...new Set(apreciaciones)].slice(0, 4),
+    observaciones: [...new Set(observaciones)].slice(0, 4),
+  };
+}
+
+/**
+ * Reporte de gerencia ("Reporte de Servicio al Cliente"): la foto mensual que
+ * antes se armaba a mano en diapositivas. Reúne en una sola respuesta:
+ *  1. Resultados generales   -- ventas, monto, ticket, 5 indicadores + delta vs. periodo anterior
+ *  2. Embudo de conversión   -- leads crudos -> asignados -> cotizados, con %
+ *  3. Rentabilidad de ads    -- costo por lead/venta, ROI, % de la inversión sobre ventas
+ *  4. Resultados por asesor  -- lo mismo por persona + ticket, ventas/día hábil, participación y notas
+ *  5. Promedios por día      -- ingresados / asignados / ventas por día de la semana
+ *
+ * El "periodo anterior" es el bloque de días inmediatamente anterior, de la
+ * misma duración que el rango pedido (para las flechas de comparación).
+ */
+async function computeMonthlyReport(fromInput, toInput) {
+  const defaults = monthRangeDefaults();
+  const from = fromInput || defaults.from;
+  const to = toInput || defaults.to;
+
+  const fromD = new Date(`${from}T00:00:00Z`);
+  const toD = new Date(`${to}T00:00:00Z`);
+  const days = Math.max(1, Math.round((toD - fromD) / 86400000) + 1);
+  const prevToD = new Date(fromD.getTime() - 86400000);
+  const prevFromD = new Date(prevToD.getTime() - (days - 1) * 86400000);
+  const prevFrom = prevFromD.toISOString().slice(0, 10);
+  const prevTo = prevToD.toISOString().slice(0, 10);
+
+  const [funnel, funnelPrev, profitability, promedios_por_dia] = await Promise.all([
+    computeFunnelReport(from, to),
+    computeFunnelReport(prevFrom, prevTo),
+    computeProfitabilityReport(from, to),
+    computeWeekdayAverages(from, to),
+  ]);
+
+  const dias_habiles = holidays.businessDaysBetween(from, to);
+  const totalLeadsCrudos = profitability.crudo.total_leads;
+  const t = funnel.totals;
+  const tp = funnelPrev.totals;
+
+  // ¿El periodo anterior sirve para comparar? Se exige volumen mínimo y un
+  // embudo sano (no se cierra más de lo que se cotiza). El CRM empezó a
+  // usarse en serio en agosto de 2026: los meses previos son backfill y
+  // comparar contra eso da deltas y notas absurdas.
+  const comparable = tp.asignados >= 15 && tp.vendidos <= tp.cotizados;
+
+  const monto_total = t.monto_vendido;
+  const ticket_venta = t.vendidos ? Math.round(monto_total / t.vendidos) : 0;
+
+  // Rentabilidad en base "cruda" (igual que el reporte original): la inversión
+  // se compara contra TODO lo que entra al negocio y todo lo que se vende, no
+  // solo el canal pagado. google_ads queda como referencia del canal puro.
+  const inversion = profitability.crudo.inversion;
+  const roi_pct = profitability.crudo.roi_pct;
+  const roi_veces = roi_pct != null ? Math.round(roi_pct) / 100 : null;
+  const ads_pct_of_sales = monto_total ? pct2(inversion, monto_total) : null;
+
+  const prevByAdvisor = new Map(funnelPrev.advisors.map((a) => [a.advisor_id, a]));
+
+  const asesores = funnel.advisors.map((a) => {
+    const prevRaw = prevByAdvisor.get(a.advisor_id) || null;
+    // Las notas y deltas solo se calculan si el periodo anterior es comparable.
+    const prev = comparable ? prevRaw : null;
+    const ticket = a.vendidos ? Math.round(a.monto_vendido / a.vendidos) : 0;
+    const ventasPorDia = a.vendidos && dias_habiles ? dias_habiles / a.vendidos : null;
+    const cadaNDias = ventasPorDia ? Math.max(1, Math.round(ventasPorDia)) : null;
+
+    return {
+      advisor_id: a.advisor_id,
+      name: a.name,
+      inicial: (a.name || '?').trim().charAt(0).toUpperCase(),
+      rank: a.rank,
+      asignados: a.asignados,
+      asignados_pct_equipo: pct(a.asignados, t.asignados),
+      cotizados: a.cotizados,
+      cotizados_pct_crudo: pct(a.cotizados, totalLeadsCrudos),
+      pendientes_por_cotizar: a.pendientes_por_cotizar,
+      reasignados: a.reasignados,
+      vendidos: a.vendidos,
+      monto_vendido: a.monto_vendido,
+      ticket_venta: ticket,
+      tasa_cierre: a.tasa_cierre,
+      participacion_ventas_pct: pct2(a.monto_vendido, monto_total),
+      ventas_por_dia: ventasPorDia ? round1(ventasPorDia) : null,
+      ventas_por_dia_texto: cadaNDias ? `1 venta cada ${cadaNDias} día${cadaNDias === 1 ? '' : 's'} hábil${cadaNDias === 1 ? '' : 'es'} aprox` : 'Sin ventas en el periodo',
+      indicadores: {
+        efectividad_asesor: a.efectividad_asesor,
+        cotizados_sobre_asignados: a.cotizados_sobre_asignados,
+        prom_semanal_sin_cotizar: a.prom_semanal_sin_cotizar,
+        tasa_reasignados: a.tasa_reasignados,
+        tasa_cierre: a.tasa_cierre,
+      },
+      deltas: prev
+        ? {
+            vendidos: a.vendidos - prev.vendidos,
+            monto_vendido: a.monto_vendido - prev.monto_vendido,
+            efectividad_asesor: round1(a.efectividad_asesor - prev.efectividad_asesor),
+            cotizados_sobre_asignados: round1(a.cotizados_sobre_asignados - prev.cotizados_sobre_asignados),
+            prom_semanal_sin_cotizar: round1(a.prom_semanal_sin_cotizar - prev.prom_semanal_sin_cotizar),
+            tasa_reasignados: round1(a.tasa_reasignados - prev.tasa_reasignados),
+            tasa_cierre: round1(a.tasa_cierre - prev.tasa_cierre),
+          }
+        : null,
+      ...buildAdvisorNotes(a, prev),
+    };
+  });
+
+  return {
+    from,
+    to,
+    comparado_con: { from: prevFrom, to: prevTo, asignados: tp.asignados, comparable },
+    dias_habiles,
+    generales: {
+      total_ventas: t.vendidos,
+      tasa_cierre: t.tasa_cierre,
+      monto_total,
+      ticket_venta,
+      indicadores: {
+        efectividad_asesor: t.efectividad_asesor,
+        cotizados_sobre_asignados: t.cotizados_sobre_asignados,
+        prom_semanal_sin_cotizar: t.prom_semanal_sin_cotizar,
+        tasa_reasignados: t.tasa_reasignados,
+        tasa_cierre: t.tasa_cierre,
+      },
+      deltas: {
+        total_ventas: t.vendidos - tp.vendidos,
+        monto_total: monto_total - tp.monto_vendido,
+        tasa_cierre: round1(t.tasa_cierre - tp.tasa_cierre),
+        efectividad_asesor: round1(t.efectividad_asesor - tp.efectividad_asesor),
+        cotizados_sobre_asignados: round1(t.cotizados_sobre_asignados - tp.cotizados_sobre_asignados),
+        prom_semanal_sin_cotizar: round1(t.prom_semanal_sin_cotizar - tp.prom_semanal_sin_cotizar),
+        tasa_reasignados: round1(t.tasa_reasignados - tp.tasa_reasignados),
+      },
+    },
+    embudo: {
+      total_leads_crudos: totalLeadsCrudos,
+      asignados: t.asignados,
+      asignados_pct: pct2(t.asignados, totalLeadsCrudos),
+      cotizados: t.cotizados,
+      cotizados_pct: pct2(t.cotizados, totalLeadsCrudos),
+    },
+    rentabilidad: {
+      inversion,
+      costo_por_lead: profitability.crudo.costo_por_lead,
+      costo_por_venta: profitability.crudo.costo_por_venta,
+      roi_pct,
+      roi_veces,
+      ads_pct_of_sales,
+      ticket_venta,
+      google_ads: profitability.google_ads,
+    },
+    asesores,
+    promedios_por_dia,
+  };
+}
+
 module.exports = {
   computeFunnelReport,
   computeProfitabilityReport,
@@ -679,6 +963,9 @@ module.exports = {
   computeDailySalesTrend,
   computeChannelProductFlow,
   computeForecast,
+  computeWeekdayAverages,
+  computeMonthlyReport,
+  buildAdvisorNotes,
   monthRangeDefaults,
   pct,
 };

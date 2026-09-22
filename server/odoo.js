@@ -199,6 +199,31 @@ async function setOpportunityOwner(opportunityId, owner = {}) {
   return { updated: true, ...vals };
 }
 
+// Actualiza notas (description) y/o ciudad de una oportunidad ya creada --
+// se usa cuando se edita un lead ya sincronizado (ver "Editar" en el CRM) para
+// que Odoo quede con lo mismo que se corrigió, no solo con lo que tenía al
+// crearse. Best-effort, solo escribe los campos que vengan definidos.
+async function updateOpportunityDetails(opportunityId, { description, city } = {}) {
+  if (!opportunityId) return { updated: false };
+  const vals = {};
+  if (description !== undefined) vals.description = description || '';
+  if (city !== undefined) vals.city = city || '';
+  if (!Object.keys(vals).length) return { updated: false };
+  await callKw('crm.lead', 'write', [[opportunityId], vals]);
+  return { updated: true, ...vals };
+}
+
+// Archiva (active=false) una oportunidad en Odoo -- se usa al eliminar un
+// lead del CRM que ya tenia contacto/oportunidad alla. Se archiva, no se
+// borra: Odoo desaconseja el unlink duro de crm.lead (puede tener cotizacion,
+// mensajes, actividades enganchadas) y archivada ya deja de aparecer en el
+// pipeline activo, que es lo que importa.
+async function archiveOpportunity(opportunityId) {
+  if (!opportunityId) return { archived: false };
+  await callKw('crm.lead', 'write', [[opportunityId], { active: false }]);
+  return { archived: true };
+}
+
 // ---------------------------------------------------------------------------
 //  Leads / oportunidades
 // ---------------------------------------------------------------------------
@@ -466,6 +491,8 @@ module.exports = {
   resolveSalesperson,
   resolveAdvisorTeam,
   setOpportunityOwner,
+  updateOpportunityDetails,
+  archiveOpportunity,
   stageNames,
   stageAnchors,
   findOrCreatePartner,

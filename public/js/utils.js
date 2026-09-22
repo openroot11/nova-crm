@@ -127,6 +127,20 @@ export function statusBadge(status) {
   return STATUS_LABELS[status] || STATUS_LABELS.asignado;
 }
 
+// Referencia de venta: al confirmar la cotizacion en Odoo queda como "S0..."
+// (cotizacion/pedido sin facturar); solo se vuelve "PED ..." cuando de verdad
+// se factura/paga y alguien la actualiza a mano (ver "Editar" en Ventas
+// Cerradas, y el filtro paid_only en server/routes/leads.js). El badge marca
+// en naranja las que siguen como "S0..." -- todavia sin pasar a PED -- para
+// que salte a la vista que falta actualizarlas; mismo criterio de dos
+// niveles que slaBadge (tertiary = advertencia, secondary = ok).
+export function saleReferenceBadge(saleReference) {
+  const ref = (saleReference || '').trim();
+  if (!ref) return { label: '—', badgeClass: 'bg-surface-container-highest text-on-surface-variant' };
+  if (/^PED/i.test(ref)) return { label: ref, badgeClass: 'bg-secondary-container text-on-secondary-container' };
+  return { label: ref, badgeClass: 'bg-tertiary-container text-on-tertiary-container border border-tertiary/20' };
+}
+
 export const STATUS_OPTIONS = [
   { value: 'asignado', label: 'Asignado' },
   { value: 'contactado', label: 'Contactado' },

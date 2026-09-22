@@ -1,4 +1,4 @@
-import { escapeHtml, formatMoney, STATUS_OPTIONS } from '../utils.js';
+import { escapeHtml, STATUS_OPTIONS } from '../utils.js';
 import { COLOMBIA_CITY_NAMES } from '../colombia-cities.js';
 import { renderLeadKanban } from '../components/leadKanban.js';
 import { mountNotifBell } from '../components/notifBell.js';
@@ -18,40 +18,126 @@ function localDateStr(daysAgo) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-// "Pegar datos del cliente": reconoce el formato tipico en el que llegan los
-// datos de un cliente potencial -- una linea por dato, con o sin emoji al
-// inicio ("👤 Nombre o razón social: Juan Pérez"), separados por ":"/"-"/"–"
-// o, si no hay separador, pegados directo despues de la etiqueta. Cada
-// patron incluye la frase completa de la etiqueta (no solo la primera
-// palabra) para no dejar el resto de la etiqueta pegado al valor cuando no
-// hay separador.
+// "Pegar datos del cliente": reconoce el bloque tipico que manda un cliente
+// potencial -- casi siempre una linea por dato, con o sin emoji al inicio
+// ("👤 Nombre o razón social: Juan Pérez"), separados por ":" o por "-"/"–"
+// (solo cuentan como separador con espacio a los dos lados: un guion pegado a
+// numeros -- direccion "Cra 32#15-72", NIT "900907223-4" -- NUNCA se toma
+// como separador, es parte del dato). Tambien reconoce DOS datos en la misma
+// linea ("Nit 900907223-4 cel 3135555035") y, si nadie puso "Nombre:", toma
+// la primera linea sin ninguna etiqueta conocida como nombre/razón social --
+// es lo mas comun cuando, como pasa seguido, "no indican donde va cada cosa".
 const PASTE_FIELD_PATTERNS = [
-  { field: 'name', re: /nombre(\s*o\s*raz[oó]n\s*social)?/i },
-  { field: 'document', re: /nit(\s*o\s*c[eé]dula)?|c[eé]dula/i },
+  { field: 'name', re: /nombre(\s*o\s*raz[oó]n\s*social)?|raz[oó]n\s*social/i },
+  { field: 'document', re: /nit(\s*o\s*c[eé]dula)?|c[eé]dula|\bcc\b/i },
   { field: 'address', re: /direcci[oó]n/i },
-  { field: 'city', re: /ciudad/i },
-  { field: 'phone', re: /tel[eé]fono|celular/i },
+  { field: 'city', re: /ciudad|municipio/i },
+  { field: 'phone', re: /tel[eé]fono|celular|whats\s*app|m[oó]vil|\bcel\.?\b|\btel\.?\b/i },
   { field: 'email', re: /correo(\s*electr[oó]nico)?|e-?mail/i },
 ];
 
+// Lineas de puro saludo/cortesia -- para no tomarlas como "nombre" al buscar
+// la primera linea sin etiqueta.
+const GREETING_RE = /^(hola|buenas?|buenos?\s*(d[ií]as|tardes|noches)|hi|hello|saludos)[\s,.!¡]*$/i;
+
+// Todas las etiquetas conocidas que aparecen en una linea (no solo la
+// primera), en orden de aparicion -- asi se pueden repartir varios datos que
+// llegaron pegados en la misma linea.
+function findLabelsInLine(line) {
+  const found = [];
+  for (const { field, re } of PASTE_FIELD_PATTERNS) {
+    const m = re.exec(line);
+    if (m) found.push({ field, start: m.index, end: m.index + m[0].length });
+  }
+  return found.sort((a, b) => a.start - b.start);
+}
+
+// El valor de una etiqueta va desde donde termina hasta donde empieza la
+// siguiente etiqueta en la misma linea (o el final de la linea). Se le quita
+// UN solo separador al frente -- ":" (con o sin espacio despues) o "-"/"–"
+// con espacio despues -- nunca un guion que sea parte del dato mismo.
+function cleanPastedValue(raw) {
+  return raw.replace(/^\s*(?::\s*|[-–]\s+)?/, '').trim();
+}
+
+// Paso 2 del parser (ver parseClientPaste): cuando una linea NO trae ninguna
+// etiqueta -- pasa seguido, el cliente solo tira los datos en bloque, uno por
+// linea, sin decir cual es cual -- se adivina el campo por el FORMATO del
+// dato en vez de por palabra clave.
+function onlyDigitsFromPaste(s) {
+  return String(s || '').replace(/\D/g, '');
+}
+function looksLikeEmailLine(line) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(line);
+}
+// Celular colombiano: 10 digitos empezando en 3, o el mismo con indicativo +57.
+function looksLikePhoneLine(line) {
+  if (!/^[\d\s().+-]+$/.test(line)) return false;
+  const d = onlyDigitsFromPaste(line);
+  return (d.length === 10 && d[0] === '3') || (d.length === 12 && d.startsWith('573'));
+}
+// Cedula/NIT: puros digitos (permite puntos de miles y el guion del digito de
+// verificacion del NIT), 6 a 10 digitos, y que ya se haya descartado que sea
+// un celular -- si no, un celular quedaria adivinado dos veces.
+function looksLikeDocumentLine(line) {
+  if (!/^[\d\s.-]+$/.test(line)) return false;
+  const d = onlyDigitsFromPaste(line);
+  return d.length >= 6 && d.length <= 10 && !looksLikePhoneLine(line);
+}
+// Coincidencia EXACTA contra el catalogo (no la busqueda difusa de
+// matchCityName, mas abajo, que es para cuando ya se sabe que la linea es la
+// ciudad) -- aqui hay que estar seguro antes de adivinar.
+function looksLikeCityLine(line) {
+  const norm = stripAccents(line.trim().toLowerCase());
+  return COLOMBIA_CITY_NAMES.some((c) => stripAccents(c.toLowerCase()) === norm);
+}
+
 function parseClientPaste(text) {
   const result = {};
-  const lines = String(text || '').split(/\r?\n/);
-  for (const rawLine of lines) {
+  const lines = String(text || '')
+    .split(/\r?\n/)
     // Quita emojis/simbolos sueltos al inicio de la linea (👤, 🏢, 📍, "-", "•"...).
-    const line = rawLine.replace(/^[^\p{L}\p{N}]+/u, '').trim();
-    if (!line) continue;
-    for (const { field, re } of PASTE_FIELD_PATTERNS) {
-      if (field in result) continue;
-      const m = re.exec(line);
-      if (!m) continue;
-      const fromLabel = line.slice(m.index);
-      const withSeparator = fromLabel.match(/^.*?[:\-–]\s*(.+)$/);
-      const value = withSeparator ? withSeparator[1].trim() : fromLabel.slice(m[0].length).replace(/^[\s:\-–]+/, '').trim();
-      if (value) result[field] = value;
-      break;
+    .map((rawLine) => rawLine.replace(/^[^\p{L}\p{N}]+/u, '').trim())
+    .filter(Boolean);
+
+  // Paso 1: lineas CON etiqueta explicita ("Nombre:", "NIT", "Tel"...).
+  const unlabeled = [];
+  for (const line of lines) {
+    const labels = findLabelsInLine(line);
+    if (labels.length === 0) {
+      unlabeled.push(line);
+      continue;
     }
+    labels.forEach(({ field, end }, i) => {
+      if (field in result) return;
+      const stop = i + 1 < labels.length ? labels[i + 1].start : line.length;
+      const value = cleanPastedValue(line.slice(end, stop));
+      if (value) result[field] = value;
+    });
   }
+
+  // Paso 2: lineas SIN etiqueta -- correo (tiene "@"), ciudad (coincide exacto
+  // con el catalogo), celular y documento se adivinan por formato.
+  const leftover = [];
+  for (const line of unlabeled) {
+    if (!result.email && looksLikeEmailLine(line)) result.email = line;
+    else if (!result.city && looksLikeCityLine(line)) result.city = line;
+    else if (!result.phone && looksLikePhoneLine(line)) result.phone = line;
+    else if (!result.document && looksLikeDocumentLine(line)) result.document = line;
+    else leftover.push(line);
+  }
+
+  // Lo que ni tenia etiqueta ni tiene un formato reconocible: la primera
+  // linea (que no sea un saludo) se asume nombre/razón social -- el dato que
+  // casi siempre llega de primero sin rotular -- y lo que sobre despues de
+  // eso se junta como direccion.
+  const rest = [];
+  for (const line of leftover) {
+    if (!result.name && !GREETING_RE.test(line)) result.name = line;
+    else rest.push(line);
+  }
+  if (!result.address && rest.length) result.address = rest.join(', ');
+
   return result;
 }
 
@@ -218,6 +304,27 @@ export async function mount(container, ctx) {
               ${STATUS_OPTIONS.map((s) => `<option value="${s.value}">${s.label}</option>`).join('')}
             </select>
           </div>
+          ${canCreate ? `
+          <div>
+            <label class="block text-[10px] font-label-bold text-on-surface-variant mb-1 uppercase tracking-wider">Asesor</label>
+            <select id="filter-asesor" class="p-2 bg-surface-container-lowest border border-outline-variant rounded-md text-body-sm outline-none focus:border-outline">
+              <option value="">Todos</option>
+            </select>
+          </div>` : ''}
+          <div>
+            <label class="block text-[10px] font-label-bold text-on-surface-variant mb-1 uppercase tracking-wider">Producto</label>
+            <select id="filter-producto" class="p-2 bg-surface-container-lowest border border-outline-variant rounded-md text-body-sm outline-none focus:border-outline">
+              <option value="">Todos</option>
+              ${PRODUCTS.map((p) => `<option value="${p}">${p}</option>`).join('')}
+            </select>
+          </div>
+          <div>
+            <label class="block text-[10px] font-label-bold text-on-surface-variant mb-1 uppercase tracking-wider">Canal</label>
+            <select id="filter-canal" class="p-2 bg-surface-container-lowest border border-outline-variant rounded-md text-body-sm outline-none focus:border-outline">
+              <option value="">Todos</option>
+              ${SOURCES.map((s) => `<option value="${s}">${s}</option>`).join('')}
+            </select>
+          </div>
           <div>
             <label id="filter-fecha-label" class="block text-[10px] font-label-bold text-on-surface-variant mb-1 uppercase tracking-wider">Fecha</label>
             <select id="filter-fecha" class="p-2 bg-surface-container-lowest border border-outline-variant rounded-md text-body-sm outline-none focus:border-outline">
@@ -227,6 +334,10 @@ export async function mount(container, ctx) {
               <option value="antiguos">Hace más de 3 días</option>
             </select>
           </div>
+          <label id="filter-unsynced-wrap" hidden class="flex items-center gap-1.5 text-body-sm text-on-surface-variant pb-2 cursor-pointer">
+            <input id="filter-unsynced" type="checkbox" class="rounded border-outline-variant" />
+            Solo sin Odoo
+          </label>
           <button id="filter-clear" class="px-3 py-2 rounded-md border border-outline-variant text-body-sm font-label-bold text-on-surface-variant hover:bg-surface-container-lowest transition-colors">Limpiar filtros</button>
           ${canCreate ? `
           <button id="export-xlsx-btn" class="ml-auto px-3 py-2 bg-primary text-on-primary rounded-md text-label-bold font-label-bold hover:bg-on-primary-fixed-variant transition-colors flex items-center gap-1.5" title="Descarga en Excel los leads que cumplen los filtros de arriba">
@@ -327,8 +438,30 @@ export async function mount(container, ctx) {
   const kpisEl = container.querySelector('#ventas-kpis');
 
   const filterEstado = container.querySelector('#filter-estado');
+  const filterAsesor = container.querySelector('#filter-asesor');
+  const filterProducto = container.querySelector('#filter-producto');
+  const filterCanal = container.querySelector('#filter-canal');
   const filterFecha = container.querySelector('#filter-fecha');
   const filterFechaLabel = container.querySelector('#filter-fecha-label');
+  const filterUnsyncedWrap = container.querySelector('#filter-unsynced-wrap');
+  const filterUnsynced = container.querySelector('#filter-unsynced');
+
+  // Estado de Odoo (una sola vez al montar, no por tarjeta): habilita el
+  // check "Solo sin Odoo" y el link "Ver en Odoo" de cada tarjeta -- si la
+  // integración está apagada, todas las tarjetas darían "sin Odoo" y el
+  // filtro no tendría sentido, así que queda oculto.
+  let odooEnabled = false;
+  let odooUrl = null;
+  async function loadOdooState() {
+    try {
+      const s = await ctx.api.get('/api/odoo/status');
+      odooEnabled = !!(s && s.enabled && s.ok !== false);
+      odooUrl = (s && s.url) || null;
+    } catch {
+      odooEnabled = false;
+    }
+    if (filterUnsyncedWrap) filterUnsyncedWrap.hidden = !odooEnabled;
+  }
   const searchInput = container.querySelector('#ventas-search');
 
   // Vendido/Perdido son ventas ya cerradas: para esos dos estados el rango
@@ -444,6 +577,24 @@ export async function mount(container, ctx) {
     }
   }
 
+  // Opciones del filtro "Asesor": TODOS los asesores (incluye inactivos), a
+  // diferencia del <select> de Alta Rápida que solo ofrece activos/no-rojo --
+  // aquí es para poder ver leads viejos de alguien que ya no está en rotación.
+  async function loadAsesorFilterOptions() {
+    if (!filterAsesor) return;
+    let advisors = [];
+    try {
+      advisors = (await ctx.api.get('/api/advisors')).filter((a) => !a.is_group);
+    } catch {
+      return;
+    }
+    const previousValue = filterAsesor.value;
+    filterAsesor.innerHTML =
+      '<option value="">Todos</option>' +
+      advisors.map((a) => `<option value="${a.id}">${escapeHtml(a.name)}${a.active ? '' : ' (inactivo)'}</option>`).join('');
+    if (advisors.some((a) => String(a.id) === previousValue)) filterAsesor.value = previousValue;
+  }
+
   async function loadAdvisorOptions() {
     if (canCreate) {
       let advisors = [];
@@ -483,6 +634,9 @@ export async function mount(container, ctx) {
   function buildQuery() {
     const params = new URLSearchParams();
     if (filterEstado.value) params.set('status', filterEstado.value);
+    if (filterAsesor && filterAsesor.value) params.set('advisor_id', filterAsesor.value);
+    if (filterProducto.value) params.set('product', filterProducto.value);
+    if (filterCanal.value) params.set('source', filterCanal.value);
     if (searchQuery) {
       // Buscar es "encontrar este cliente donde sea": ignora el filtro de
       // fecha (que por defecto es solo el dia de hoy) para no dar falsos
@@ -508,20 +662,28 @@ export async function mount(container, ctx) {
   }
 
   function renderCurrent() {
-    countBadge.textContent = `${allLeads.length} registro${allLeads.length === 1 ? '' : 's'}`;
+    // "Solo sin Odoo" es cliente-side (no un query param mas): allLeads ya
+    // trae odoo_lead_id de cada uno, no vale la pena un viaje al backend
+    // solo para filtrar por eso.
+    const visible = odooEnabled && filterUnsynced && filterUnsynced.checked ? allLeads.filter((l) => !l.odoo_lead_id) : allLeads;
 
-    const total = allLeads.length;
-    const vendidos = allLeads.filter((l) => l.status === 'cerrado_ganado');
-    const montoVendido = vendidos.reduce((s, l) => s + (l.amount || 0), 0);
-    const tasaCierre = total ? Math.round((vendidos.length / total) * 1000) / 10 : 0;
+    countBadge.textContent = `${visible.length} registro${visible.length === 1 ? '' : 's'}`;
+
+    // KPI de esta pantalla = el embudo de LEADS (asignado/contactado/
+    // cotizado), no el resultado de ventas -- eso ya tiene su propia vista
+    // (Ventas Cerradas: vendidos, monto, tasa de cierre).
+    const total = visible.length;
+    const asignados = visible.filter((l) => l.status === 'asignado').length;
+    const contactados = visible.filter((l) => l.status === 'contactado').length;
+    const cotizados = visible.filter((l) => l.status === 'cotizado').length;
     kpisEl.innerHTML = [
       kpiTile('Total Leads', total, 'En el rango filtrado', 'group'),
-      kpiTile('Vendidos', vendidos.length, `${tasaCierre}% de conversión`, 'task_alt', 'text-secondary'),
-      kpiTile('Monto Vendido', formatMoney(montoVendido), 'Ventas cerradas del rango', 'payments', 'text-secondary'),
-      kpiTile('Tasa de Cierre', `${tasaCierre}%`, 'Vendidos sobre el total', 'percent'),
+      kpiTile('Asignados', asignados, 'Por contactar', 'person_add'),
+      kpiTile('Contactados', contactados, 'En seguimiento', 'call'),
+      kpiTile('Cotizados', cotizados, 'Esperando respuesta', 'request_quote', 'text-secondary'),
     ].join('');
 
-    renderLeadKanban(boardWrap, allLeads, ctx, load);
+    renderLeadKanban(boardWrap, visible, ctx, load, { odooEnabled, odooUrl });
   }
 
   async function load() {
@@ -552,12 +714,17 @@ export async function mount(container, ctx) {
     window.open(`/api/leads/xlsx${buildQuery()}`, '_blank');
   });
   filterEstado.addEventListener('change', updateDateFilterLabels);
-  [filterEstado, filterFecha].forEach((el) => {
-    el.addEventListener('change', load);
+  [filterEstado, filterAsesor, filterProducto, filterCanal, filterFecha].forEach((el) => {
+    el?.addEventListener('change', load);
   });
+  filterUnsynced?.addEventListener('change', renderCurrent);
   container.querySelector('#filter-clear').addEventListener('click', () => {
     filterEstado.value = '';
+    if (filterAsesor) filterAsesor.value = '';
+    filterProducto.value = '';
+    filterCanal.value = '';
     filterFecha.value = '';
+    if (filterUnsynced) filterUnsynced.checked = false;
     updateDateFilterLabels();
     load();
   });
@@ -622,8 +789,16 @@ export async function mount(container, ctx) {
     load();
     loadAdvisorOptions();
   });
-  const offAdvisors = ctx.ws.on('advisors_changed', loadAdvisorOptions);
-  await Promise.all([load(), loadAdvisorOptions()]);
+  const offAdvisors = ctx.ws.on('advisors_changed', () => {
+    loadAdvisorOptions();
+    loadAsesorFilterOptions();
+  });
+  await Promise.all([load(), loadAdvisorOptions(), loadAsesorFilterOptions(), loadOdooState()]);
+  // loadOdooState() puede resolver despues del primer renderCurrent() (ya
+  // disparado dentro de load()) -- se vuelve a pintar para que el check "Solo
+  // sin Odoo" y el link "Ver en Odoo" de las tarjetas queden bien desde el
+  // arranque, no solo tras el siguiente refresco.
+  renderCurrent();
 
   return () => {
     offLeads();
