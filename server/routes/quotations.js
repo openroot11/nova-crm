@@ -5,6 +5,9 @@ const PDFDocument = require('pdfkit');
 const { db, getSetting } = require('../db');
 const { broadcast } = require('../realtime');
 const nativeQuotes = require('../nativeQuotes');
+const velaraServices = require('../velaraServices');
+
+const LOGO_MARK_PATH = path.join(__dirname, '..', '..', 'public', 'img', 'logo-mark.png');
 
 const router = express.Router();
 
@@ -33,6 +36,73 @@ async function loadOwned(req, res) {
   return quotation;
 }
 
+// GET /api/quotations?q=&state=&service=&advisor_id=&from=&to=
+// Lista TODAS las cotizaciones nativas (no las de Odoo -- esas siguen en
+// GET /api/leads/quotations, para la pantalla vieja) con filtros de
+// búsqueda -- alimenta la pantalla "Cotizaciones". Un asesor solo ve las de
+// sus propios leads, igual que en el resto del CRM.
+router.get('/', async (req, res) => {
+  const { q, state, service, advisor_id, from, to } = req.query;
+  const conditions = [];
+  const params = [];
+  if (state) {
+    conditions.push('quo.state = ?');
+    params.push(state);
+  }
+  if (service) {
+    conditions.push('quo.service_slug = ?');
+    params.push(service);
+  }
+  if (from) {
+    conditions.push('quo.date_order >= ?');
+    params.push(from);
+  }
+  if (to) {
+    conditions.push('quo.date_order <= ?');
+    params.push(`${to} 23:59:59`);
+  }
+  if (req.user.role === 'asesor') {
+    conditions.push('l.assigned_advisor_id = ?');
+    params.push(req.user.advisor_id);
+  } else if (advisor_id) {
+    conditions.push('l.assigned_advisor_id = ?');
+    params.push(Number(advisor_id));
+  }
+  if (q && q.trim()) {
+    const like = `%${q.trim()}%`;
+    conditions.push('(l.client_name LIKE ? OR l.phone LIKE ? OR l.document LIKE ? OR quo.number LIKE ?)');
+    params.push(like, like, like, like);
+  }
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  const rows = await db
+    .prepare(
+      `SELECT quo.*, l.client_name, l.phone, l.document, l.city, l.assigned_advisor_id
+         FROM quotations quo
+         JOIN leads l ON l.id = quo.lead_id
+         ${where}
+        ORDER BY quo.date_order DESC, quo.id DESC
+        LIMIT 300`
+    )
+    .all(...params);
+  const advisorsById = new Map((await db.prepare('SELECT id, name FROM advisors').all()).map((a) => [a.id, a]));
+  const quotations = rows.map((r) => ({
+    id: r.id,
+    number: r.number,
+    state: r.state,
+    date_order: r.date_order,
+    validity_date: r.validity_date,
+    amount_total: r.amount_total,
+    service_slug: r.service_slug,
+    service_title: r.service_slug ? velaraServices.findService(r.service_slug)?.title || r.service_slug : null,
+    lead_id: r.lead_id,
+    client_name: r.client_name,
+    phone: r.phone,
+    city: r.city,
+    advisor_name: r.assigned_advisor_id ? advisorsById.get(r.assigned_advisor_id)?.name || null : null,
+  }));
+  res.json({ quotations });
+});
+
 router.get('/:id', async (req, res) => {
   const quotation = await loadOwned(req, res);
   if (!quotation) return;
@@ -47,9 +117,24 @@ router.put('/:id', async (req, res) => {
   if (quotation.state !== 'draft' && quotation.state !== 'sent') {
     return res.status(409).json({ error: 'Esta cotización ya está confirmada; no se pueden cambiar sus líneas' });
   }
-  const { lines } = req.body || {};
+  const { lines, service_slug, service_fields, note } = req.body || {};
   const cleanLines = Array.isArray(lines) ? lines.filter((l) => l && l.product_name && Number(l.qty) > 0) : [];
   if (!cleanLines.length) return res.status(400).json({ error: 'Agrega al menos un producto a la cotización' });
+
+  if (service_slug !== undefined) {
+    if (service_slug) {
+      const check = velaraServices.validateServiceFields(service_slug, service_fields);
+      if (!check.ok) return res.status(400).json({ error: check.error });
+      await db
+        .prepare("UPDATE quotations SET service_slug = ?, service_fields = ?, updated_at = datetime('now') WHERE id = ?")
+        .run(service_slug, Object.keys(check.fields).length ? JSON.stringify(check.fields) : null, quotation.id);
+    } else {
+      await db.prepare("UPDATE quotations SET service_slug = NULL, service_fields = NULL, updated_at = datetime('now') WHERE id = ?").run(quotation.id);
+    }
+  }
+  if (note !== undefined) {
+    await db.prepare("UPDATE quotations SET note = ?, updated_at = datetime('now') WHERE id = ?").run((note && note.trim()) || null, quotation.id);
+  }
 
   await nativeQuotes.writeLines(quotation.id, cleanLines);
   const updated = await nativeQuotes.readQuotation(quotation.id);
@@ -62,6 +147,32 @@ router.post('/:id/send', async (req, res) => {
   if (!quotation) return;
   if (quotation.state === 'draft') {
     await db.prepare("UPDATE quotations SET state = 'sent', updated_at = datetime('now') WHERE id = ?").run(quotation.id);
+  }
+  const updated = await nativeQuotes.readQuotation(quotation.id);
+  broadcast('leads_changed', { reason: 'quoted', id: quotation.lead_id });
+  res.json({ quotation: updated });
+});
+
+// Estados intermedios entre "Enviada" y "Aprobada": se marcan a mano, igual
+// que el resto del embudo en este CRM (nada se auto-avanza solo). "En
+// seguimiento" = ya se le está insistiendo al cliente; "Aprobada" = el
+// cliente dio el visto bueno, falta solo convertirla en venta.
+router.post('/:id/seguimiento', async (req, res) => {
+  const quotation = await loadOwned(req, res);
+  if (!quotation) return;
+  if (quotation.state === 'sent' || quotation.state === 'draft') {
+    await db.prepare("UPDATE quotations SET state = 'seguimiento', updated_at = datetime('now') WHERE id = ?").run(quotation.id);
+  }
+  const updated = await nativeQuotes.readQuotation(quotation.id);
+  broadcast('leads_changed', { reason: 'quoted', id: quotation.lead_id });
+  res.json({ quotation: updated });
+});
+
+router.post('/:id/aprobar', async (req, res) => {
+  const quotation = await loadOwned(req, res);
+  if (!quotation) return;
+  if (quotation.state !== 'sale') {
+    await db.prepare("UPDATE quotations SET state = 'aprobada', updated_at = datetime('now') WHERE id = ?").run(quotation.id);
   }
   const updated = await nativeQuotes.readQuotation(quotation.id);
   broadcast('leads_changed', { reason: 'quoted', id: quotation.lead_id });
@@ -83,6 +194,18 @@ router.post('/:id/confirm', async (req, res) => {
   res.json({ quotation: updated });
 });
 
+// Cancela la cotización (state 'cancel') -- disponible desde cualquier
+// estado salvo ya confirmada como venta.
+router.post('/:id/cancel', async (req, res) => {
+  const quotation = await loadOwned(req, res);
+  if (!quotation) return;
+  if (quotation.state === 'sale') return res.status(409).json({ error: 'Ya está confirmada como venta; no se puede cancelar' });
+  await db.prepare("UPDATE quotations SET state = 'cancel', updated_at = datetime('now') WHERE id = ?").run(quotation.id);
+  const updated = await nativeQuotes.readQuotation(quotation.id);
+  broadcast('leads_changed', { reason: 'quoted', id: quotation.lead_id });
+  res.json({ quotation: updated });
+});
+
 // "Clonar" (como el botón Clone de Salesforce): arma una cotización nueva en
 // borrador para el mismo lead, copiando las líneas de esta -- útil para
 // hacer una revisión sin perder ni tocar la original.
@@ -94,14 +217,18 @@ router.post('/:id/duplicate', async (req, res) => {
   res.status(201).json({ quotation: copy });
 });
 
-// Mismos colores de marca que ya usa el resto de Nova CRM (ver
-// public/index.html -> tailwind.config -> colors: primary/on-surface/
-// on-surface-variant/outline-variant/surface-container-low).
-const RED = '#981b1e';
-const DARK = '#191717';
-const GRAY = '#5b5959';
-const BORDER = '#dbdcdd';
-const BOX_BG = '#f1f0f0';
+// Identidad visual de Velara Taller S.A.S. (ver Velara/notas/identidad-
+// visual.md -- fuente de verdad en Velara/sitio/tailwind.config.js). El
+// acento naranja se usa como acento nomás (títulos pequeños, la caja del
+// total, el botón de WhatsApp) -- nunca como color dominante de página,
+// misma regla que en el sitio.
+const INK = '#1B1B1B';
+const SMOKE = '#6E6E6E';
+const SMOKE_LINE = '#E2E0DB';
+const ACCENT = '#FF5A1F';
+const ACCENT_DEEP = '#C7420E';
+const ACCENT_PALE = '#FFE7DA';
+const BOX_BG = '#FAF9F7';
 
 const PAGE_L = 50;
 const PAGE_R = 562; // LETTER (612pt) - 50pt de margen a cada lado
@@ -109,7 +236,7 @@ const CONTENT_W = PAGE_R - PAGE_L;
 
 async function quoteSettings() {
   const [name, nit, address, phone, email, payment, terms] = await Promise.all([
-    getSetting('quote_company_name', 'Manufacturas y Diseños Nova S.A.S.'),
+    getSetting('quote_company_name', 'Velara Taller S.A.S.'),
     getSetting('quote_company_nit', ''),
     getSetting('quote_company_address', ''),
     getSetting('quote_company_phone', ''),
@@ -121,77 +248,101 @@ async function quoteSettings() {
 }
 
 // Dibuja la cotización completa sobre un PDFDocument ya creado (sin abrirlo
-// ni cerrarlo -- eso lo hace quien llama). Misma plantilla que ya usaba Nova
-// con Odoo (logo + datos de la empresa arriba, ficha del cliente + folio a
-// la derecha, tabla de líneas con encabezado rojo, totales con el total
-// resaltado, caja de datos de pago y políticas al pie) -- ver un
-// Cotización_S0....pdf viejo del proyecto como referencia. Aparte del router
-// para poder probarla desde un script suelto sin pasar por HTTP/auth.
+// ni cerrarlo -- eso lo hace quien llama). Plantilla de Velara Taller S.A.S.
+// (ver Velara/notas/identidad-visual.md): wordmark + acento naranja arriba,
+// título editorial, ficha de cliente/servicio/notas en 3 columnas, tabla de
+// líneas, total resaltado en tono suave (nunca un bloque naranja sólido --
+// "el acento nunca domina"), condiciones y CTA de WhatsApp al pie. Aparte
+// del router para poder probarla desde un script suelto sin pasar por
+// HTTP/auth.
 function drawQuotationPdf(doc, { quotation, lead, client, advisor, cfg }) {
-  // ---- encabezado: logo + datos de la empresa -----------------------------
-  const logoPath = path.join(__dirname, '..', '..', 'public', 'img', 'logo.png');
-  if (fs.existsSync(logoPath)) {
+  const service = quotation.service_slug ? velaraServices.findService(quotation.service_slug) : null;
+
+  // ---- encabezado: logo + wordmark + tagline -------------------------------
+  const TEXT_X = PAGE_L; // se corre a la derecha del logo solo si el logo cargó
+  let textX = TEXT_X;
+  if (fs.existsSync(LOGO_MARK_PATH)) {
     try {
-      doc.image(logoPath, PAGE_L, 45, { width: 90 });
+      doc.image(LOGO_MARK_PATH, PAGE_L, 40, { height: 46 });
+      textX = PAGE_L + 56;
     } catch {
-      /* si el logo no se puede leer, se sigue sin el */
+      /* si el logo no se puede leer, se sigue solo con el wordmark en texto */
     }
   }
-  doc.font('Helvetica-Bold').fontSize(11).fillColor(DARK).text(cfg.name, 300, 48, { width: 262, align: 'right' });
-  doc.font('Helvetica').fontSize(9).fillColor(GRAY);
-  let hy = 62;
-  [cfg.nit ? `NIT: ${cfg.nit}` : '', cfg.address, cfg.phone, cfg.email].filter(Boolean).forEach((line) => {
-    doc.text(line, 300, hy, { width: 262, align: 'right' });
-    hy += 12;
-  });
+  doc.font('Times-Bold').fontSize(26).fillColor(INK).text('VELARA', textX, 45);
+  doc.font('Helvetica').fontSize(8).fillColor(SMOKE).text('TALLER S.A.S.', textX, 74, { characterSpacing: 1.5 });
+  doc.moveTo(textX, 92).lineTo(textX + 40, 92).lineWidth(2).strokeColor(ACCENT).stroke();
+  doc.font('Helvetica').fontSize(8).fillColor(SMOKE).text('TAPICERÍA QUE TE ACOMPAÑA', textX, 98, { characterSpacing: 1 });
 
-  doc.moveTo(PAGE_L, 130).lineTo(PAGE_R, 130).lineWidth(2).strokeColor(RED).stroke();
-
-  // ---- ficha del cliente (izq.) + folio de la cotizacion (der.) -----------
-  const blockTop = 150;
-  doc.rect(PAGE_L, blockTop, 3, 62).fill(RED);
-  doc.font('Helvetica-Bold').fontSize(8).fillColor(RED).text('INFORMACIÓN DEL CLIENTE', PAGE_L + 10, blockTop);
   doc
-    .font('Helvetica-Bold')
-    .fontSize(12)
-    .fillColor(DARK)
-    .text(lead ? lead.client_name : '—', PAGE_L + 10, blockTop + 13, { width: 240 });
-  doc.font('Helvetica').fontSize(9).fillColor(GRAY);
-  let cy = blockTop + 30;
-  if (lead && lead.document) {
-    doc.text(`NIT/CC: ${lead.document}`, PAGE_L + 10, cy, { width: 240 });
-    cy += 12;
-  }
-  const address = (lead && lead.address) || (client && client.address);
-  if (address) {
-    doc.text(`Dirección: ${address}`, PAGE_L + 10, cy, { width: 240 });
-    cy += 12;
-  }
-  if (lead && lead.city) {
-    doc.text(`Ciudad: ${lead.city}`, PAGE_L + 10, cy, { width: 240 });
-    cy += 12;
-  }
-  const email = (lead && lead.email) || (client && client.email);
-  if (email) {
-    doc.text(email, PAGE_L + 10, cy, { width: 240 });
-  }
+    .font('Helvetica')
+    .fontSize(8)
+    .fillColor(SMOKE)
+    .text('TAPICERÍA AUTOMOTRIZ Y DE MOTOS\nCARPAS Y FORROS A LA MEDIDA', 300, 55, { width: 262, align: 'right' });
 
-  doc.font('Helvetica-Bold').fontSize(20).fillColor(RED).text('COTIZACIÓN', 300, blockTop, { width: 262, align: 'right' });
-  doc
-    .font('Helvetica-Bold')
-    .fontSize(12)
-    .fillColor(DARK)
-    .text(`No. ${quotation.number || '—'}`, 300, blockTop + 26, { width: 262, align: 'right' });
+  doc.moveTo(PAGE_L, 122).lineTo(PAGE_R, 122).lineWidth(1).strokeColor(SMOKE_LINE).stroke();
 
-  // ---- fila de metadatos: fecha / vencimiento / vendedor -------------------
-  const metaTop = 232;
-  const metaCol = (label, value, x) => {
-    doc.font('Helvetica-Bold').fontSize(8).fillColor(GRAY).text(label, x, metaTop, { width: 160 });
-    doc.font('Helvetica').fontSize(9).fillColor(DARK).text(value || '—', x, metaTop + 12, { width: 160 });
+  // ---- título + folio -------------------------------------------------------
+  const blockTop = 145;
+  doc.font('Times-Bold').fontSize(28).fillColor(INK).text('Cotización', PAGE_L, blockTop);
+  doc.font('Helvetica').fontSize(9).fillColor(SMOKE).text(`Gracias por confiar en ${cfg.name}`, PAGE_L, blockTop + 48);
+
+  const metaRow = (label, value, y) => {
+    doc.font('Helvetica').fontSize(8).fillColor(SMOKE).text(label, 300, y, { width: 140 });
+    doc.font('Helvetica-Bold').fontSize(9).fillColor(INK).text(value || '—', 300, y, { width: 262, align: 'right' });
   };
-  metaCol('FECHA DE COTIZACIÓN', fmtDateDMY(quotation.date_order), PAGE_L);
-  metaCol('VENCIMIENTO', fmtDateDMY(quotation.validity_date), PAGE_L + 170);
-  metaCol('VENDEDOR', advisor ? advisor.name : 'Sin asignar', PAGE_L + 340);
+  metaRow('N.º de cotización', quotation.number, blockTop);
+  metaRow('Fecha de emisión', fmtDateDMY(quotation.date_order), blockTop + 16);
+  metaRow('Válida hasta', fmtDateDMY(quotation.validity_date), blockTop + 32);
+
+  // ---- 3 columnas: cliente / servicio / notas -------------------------------
+  const colTop = blockTop + 65;
+  const colW = (CONTENT_W - 32) / 3;
+  const col1X = PAGE_L;
+  const col2X = PAGE_L + colW + 16;
+  const col3X = PAGE_L + (colW + 16) * 2;
+
+  function columnHeading(x, text) {
+    doc.font('Helvetica-Bold').fontSize(8).fillColor(ACCENT_DEEP).text(text.toUpperCase(), x, colTop, { width: colW, characterSpacing: 0.4 });
+  }
+  function fieldRow(x, y, label, value) {
+    doc.font('Helvetica').fontSize(7.5).fillColor(SMOKE).text(label, x, y, { width: colW });
+    const text = value || '—';
+    doc.font('Helvetica-Bold').fontSize(9).fillColor(INK);
+    const h = doc.heightOfString(text, { width: colW });
+    doc.text(text, x, y + 10, { width: colW });
+    return y + 10 + h + 8;
+  }
+
+  columnHeading(col1X, 'Datos del cliente');
+  let y1 = colTop + 16;
+  y1 = fieldRow(col1X, y1, 'Nombre', lead ? lead.client_name : client ? client.name : '—');
+  if ((lead && lead.document) || (client && client.document)) y1 = fieldRow(col1X, y1, 'Documento', (lead && lead.document) || client.document);
+  y1 = fieldRow(col1X, y1, 'Teléfono', (lead && lead.phone) || (client && client.phone));
+  const clientEmail = (lead && lead.email) || (client && client.email);
+  if (clientEmail) y1 = fieldRow(col1X, y1, 'Correo', clientEmail);
+  if (lead && lead.city) y1 = fieldRow(col1X, y1, 'Ciudad', lead.city);
+
+  columnHeading(col2X, service ? service.title : 'Detalles del servicio');
+  let y2 = colTop + 16;
+  if (service && quotation.service_fields && Object.keys(quotation.service_fields).length) {
+    for (const f of service.fields) {
+      const value = quotation.service_fields[f.key];
+      if (value) y2 = fieldRow(col2X, y2, f.label, value);
+    }
+  } else {
+    doc.font('Helvetica').fontSize(9).fillColor(SMOKE).text('Sin detalles adicionales del servicio.', col2X, y2, { width: colW });
+  }
+
+  columnHeading(col3X, 'Información adicional');
+  let y3 = colTop + 16;
+  y3 = fieldRow(col3X, y3, 'Servicio', service ? service.title : lead ? lead.product : '—');
+  const notes = quotation.note || (lead && lead.notes);
+  if (notes) {
+    doc.font('Helvetica').fontSize(7.5).fillColor(SMOKE).text('Observaciones', col3X, y3, { width: colW });
+    doc.font('Helvetica').fontSize(8.5).fillColor(INK).text(notes, col3X, y3 + 10, { width: colW });
+    y3 += 10 + doc.heightOfString(notes, { width: colW }) + 10;
+  }
 
   // ---- tabla de lineas -------------------------------------------------------
   const cols = {
@@ -201,10 +352,10 @@ function drawQuotationPdf(doc, { quotation, lead, client, advisor, cfg }) {
     tax: { x: PAGE_L + 390, w: 50 },
     total: { x: PAGE_L + 445, w: 62 },
   };
-  let y = 280;
+  let y = Math.max(y1, y2, y3) + 12;
   const tableHeader = () => {
-    doc.rect(PAGE_L, y, CONTENT_W, 20).fill(RED);
-    doc.font('Helvetica-Bold').fontSize(8).fillColor('#ffffff');
+    doc.rect(PAGE_L, y, CONTENT_W, 20).fill(BOX_BG);
+    doc.font('Helvetica-Bold').fontSize(8).fillColor(INK);
     doc.text('DESCRIPCIÓN', cols.desc.x, y + 6, { width: cols.desc.w });
     doc.text('CANTIDAD', cols.qty.x, y + 6, { width: cols.qty.w, align: 'right' });
     doc.text('PRECIO UNITARIO', cols.price.x, y + 6, { width: cols.price.w, align: 'right' });
@@ -223,19 +374,19 @@ function drawQuotationPdf(doc, { quotation, lead, client, advisor, cfg }) {
       y = 50;
       tableHeader();
     }
-    doc.font('Helvetica-Bold').fontSize(9).fillColor(DARK).text(l.product_name, cols.desc.x, y + 5, { width: cols.desc.w });
+    doc.font('Helvetica-Bold').fontSize(9).fillColor(INK).text(l.product_name, cols.desc.x, y + 5, { width: cols.desc.w });
     if (l.description) {
-      doc.font('Helvetica').fontSize(8).fillColor(GRAY).text(l.description, cols.desc.x, y + 5 + nameHeight + 2, { width: cols.desc.w });
+      doc.font('Helvetica').fontSize(8).fillColor(SMOKE).text(l.description, cols.desc.x, y + 5 + nameHeight + 2, { width: cols.desc.w });
     }
-    doc.font('Helvetica').fontSize(9).fillColor(DARK).text(`${l.qty} Unidades`, cols.qty.x, y + 5, { width: cols.qty.w, align: 'right' });
+    doc.font('Helvetica').fontSize(9).fillColor(INK).text(`${l.qty} Unidades`, cols.qty.x, y + 5, { width: cols.qty.w, align: 'right' });
     doc.text(money(l.price_unit), cols.price.x, y + 5, { width: cols.price.w, align: 'right' });
     if (l.discount_percent > 0) {
-      doc.fontSize(7).fillColor(RED).text(`− ${l.discount_percent}%`, cols.price.x, y + 16, { width: cols.price.w, align: 'right' });
+      doc.fontSize(7).fillColor(ACCENT_DEEP).text(`− ${l.discount_percent}%`, cols.price.x, y + 16, { width: cols.price.w, align: 'right' });
     }
-    doc.fontSize(9).fillColor(GRAY).text('19%', cols.tax.x, y + 5, { width: cols.tax.w, align: 'center' });
-    doc.fillColor(DARK).text(money(l.subtotal), cols.total.x, y + 5, { width: cols.total.w, align: 'right' });
+    doc.fontSize(9).fillColor(SMOKE).text('19%', cols.tax.x, y + 5, { width: cols.tax.w, align: 'center' });
+    doc.fillColor(INK).text(money(l.subtotal), cols.total.x, y + 5, { width: cols.total.w, align: 'right' });
     y += rowH;
-    doc.moveTo(PAGE_L, y).lineTo(PAGE_R, y).lineWidth(0.5).strokeColor(BORDER).stroke();
+    doc.moveTo(PAGE_L, y).lineTo(PAGE_R, y).lineWidth(0.5).strokeColor(SMOKE_LINE).stroke();
   });
 
   // ---- totales ----------------------------------------------------------------
@@ -248,60 +399,89 @@ function drawQuotationPdf(doc, { quotation, lead, client, advisor, cfg }) {
   const totLabelW = 100;
   const totValX = PAGE_L + 400;
   const totValW = 112;
-  doc.font('Helvetica').fontSize(9).fillColor(GRAY).text('Subtotal', totLabelX, y, { width: totLabelW });
-  doc.fillColor(DARK).text(money(quotation.amount_untaxed), totValX, y, { width: totValW, align: 'right' });
+  doc.font('Helvetica').fontSize(9).fillColor(SMOKE).text('Subtotal', totLabelX, y, { width: totLabelW });
+  doc.fillColor(INK).text(money(quotation.amount_untaxed), totValX, y, { width: totValW, align: 'right' });
   y += 16;
-  doc.fillColor(GRAY).text('IVA 19%', totLabelX, y, { width: totLabelW });
-  doc.fillColor(DARK).text(money(quotation.amount_tax), totValX, y, { width: totValW, align: 'right' });
+  doc.fillColor(SMOKE).text('IVA 19%', totLabelX, y, { width: totLabelW });
+  doc.fillColor(INK).text(money(quotation.amount_tax), totValX, y, { width: totValW, align: 'right' });
   y += 18;
-  doc.rect(totLabelX - 5, y - 3, PAGE_R - (totLabelX - 5), 22).fill(RED);
-  doc.font('Helvetica-Bold').fontSize(11).fillColor('#ffffff').text('Total', totLabelX, y + 3, { width: totLabelW });
-  doc.text(money(quotation.amount_total), totValX, y + 3, { width: totValW, align: 'right' });
-  y += 35;
+  doc.rect(totLabelX - 10, y - 4, PAGE_R - (totLabelX - 10), 26).fill(ACCENT_PALE);
+  doc.font('Helvetica-Bold').fontSize(12).fillColor(INK).text('Total', totLabelX, y + 4, { width: totLabelW });
+  doc.text(money(quotation.amount_total), totValX, y + 4, { width: totValW, align: 'right' });
+  y += 40;
 
-  // ---- notas de esta cotizacion (si el asesor escribio alguna) ---------------
-  if (quotation.note) {
-    doc.font('Helvetica-Bold').fontSize(8).fillColor(GRAY).text('NOTAS', PAGE_L, y);
-    y += 12;
-    doc.font('Helvetica').fontSize(9).fillColor(DARK).text(quotation.note, PAGE_L, y, { width: CONTENT_W });
-    y += doc.heightOfString(quotation.note, { width: CONTENT_W }) + 20;
+  // ---- condiciones y notas (izq.) + CTA de WhatsApp (der.) -------------------
+  const termLines = (cfg.terms || '').split('\n').filter(Boolean);
+  const halfW = (CONTENT_W - 24) / 2;
+  const ctaX = PAGE_L + halfW + 24;
+  const sectionTop = y;
+  if (termLines.length) {
+    if (sectionTop > 620) {
+      doc.addPage();
+      y = 50;
+    }
+    doc.font('Helvetica-Bold').fontSize(9).fillColor(ACCENT_DEEP).text('CONDICIONES Y NOTAS', PAGE_L, y);
+    y += 14;
+    doc.font('Helvetica').fontSize(7.5).fillColor(SMOKE);
+    termLines.forEach((line) => {
+      const h = doc.heightOfString(`•  ${line}`, { width: halfW });
+      doc.text(`•  ${line}`, PAGE_L, y, { width: halfW });
+      y += h + 2;
+    });
   }
 
-  // ---- datos de pago (caja gris) -----------------------------------------------
+  if (cfg.phone) {
+    doc.font('Helvetica-Bold').fontSize(9).fillColor(ACCENT_DEEP).text('¿LISTO PARA CONTINUAR?', ctaX, sectionTop, { width: halfW });
+    doc
+      .font('Helvetica')
+      .fontSize(8)
+      .fillColor(SMOKE)
+      .text('Para confirmar, resolver dudas o ajustar la cotización, escríbanos directamente por WhatsApp.', ctaX, sectionTop + 14, {
+        width: halfW,
+      });
+    const btnY = sectionTop + 48;
+    doc.roundedRect(ctaX, btnY, halfW, 26, 4).fill(ACCENT);
+    doc.font('Helvetica-Bold').fontSize(10).fillColor('#FFFFFF').text(`Cotizar por WhatsApp   ${cfg.phone}`, ctaX, btnY + 8, { width: halfW, align: 'center' });
+    y = Math.max(y, btnY + 26 + 10);
+  }
+
+  // ---- datos de pago (caja clara), si hay algo puesto en Ajustes -------------
   const paymentLines = (cfg.payment || '').split('\n').filter(Boolean);
   if (paymentLines.length) {
+    y += 15;
     const boxH = 18 + paymentLines.length * 13;
     if (y + boxH > 730) {
       doc.addPage();
       y = 50;
     }
     doc.rect(PAGE_L, y, CONTENT_W, boxH).fill(BOX_BG);
-    doc.font('Helvetica-Bold').fontSize(9).fillColor(DARK).text('DETALLES DE PAGO:', PAGE_L + 10, y + 8);
-    doc.font('Helvetica').fontSize(8).fillColor(GRAY);
+    doc.font('Helvetica-Bold').fontSize(9).fillColor(INK).text('DETALLES DE PAGO:', PAGE_L + 10, y + 8);
+    doc.font('Helvetica').fontSize(8).fillColor(SMOKE);
     let py = y + 22;
     paymentLines.forEach((line) => {
       doc.text(line, PAGE_L + 10, py, { width: CONTENT_W - 20 });
       py += 13;
     });
-    y += boxH + 20;
+    y += boxH + 15;
   }
 
-  // ---- politicas y condiciones (pie) -------------------------------------------
-  const termLines = (cfg.terms || '').split('\n').filter(Boolean);
-  if (termLines.length) {
-    if (y > 650) {
-      doc.addPage();
-      y = 50;
-    }
-    doc.font('Helvetica-Bold').fontSize(9).fillColor(RED).text('POLÍTICAS Y CONDICIONES', PAGE_L, y);
-    y += 14;
-    doc.font('Helvetica').fontSize(7).fillColor(GRAY);
-    termLines.forEach((line) => {
-      const h = doc.heightOfString(`•  ${line}`, { width: CONTENT_W });
-      doc.text(`•  ${line}`, PAGE_L, y, { width: CONTENT_W });
-      y += h + 2;
-    });
+  // ---- pie de página: contacto + empresa -------------------------------------
+  let footerY = y + 20;
+  if (footerY > 700) {
+    doc.addPage();
+    footerY = 50;
   }
+  doc.moveTo(PAGE_L, footerY).lineTo(PAGE_R, footerY).lineWidth(1.5).strokeColor(ACCENT).stroke();
+  doc
+    .font('Helvetica')
+    .fontSize(7.5)
+    .fillColor(SMOKE)
+    .text([cfg.phone, cfg.email, cfg.address].filter(Boolean).join('   ·   '), PAGE_L, footerY + 8, { width: CONTENT_W - 180 });
+  doc
+    .font('Helvetica-Bold')
+    .fontSize(7.5)
+    .fillColor(INK)
+    .text([cfg.name, cfg.nit ? `NIT. ${cfg.nit}` : null].filter(Boolean).join('   ·   '), PAGE_L, footerY + 8, { width: CONTENT_W, align: 'right' });
 }
 
 router.get('/:id/pdf', async (req, res) => {

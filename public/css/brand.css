@@ -4,7 +4,7 @@ body {
 }
 
 body {
-  font-family: 'Inter', system-ui, sans-serif;
+  font-family: 'Manrope', system-ui, sans-serif;
 }
 
 .material-symbols-outlined {
@@ -16,20 +16,26 @@ body {
   font-variation-settings: 'FILL' 1;
 }
 
+/* var(--c-outline-variant) viene de #theme-vars en index.html -- asi el
+   scrollbar tambien cambia solo con el modo oscuro. */
 * {
   scrollbar-width: thin;
-  scrollbar-color: #c3c6d6 transparent;
+  scrollbar-color: var(--c-outline-variant, #c3c6d6) transparent;
 }
 *::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 *::-webkit-scrollbar-thumb {
-  background: #c3c6d6;
+  background: var(--c-outline-variant, #c3c6d6);
   border-radius: 8px;
 }
 
-/* Pulso de alerta critica -- mismo rojo que el token "error" */
+/* Pulso de alerta critica -- mismo rojo que el token "error" (fijo en rgba
+   a proposito: en modo oscuro "error" pasa a un rojo mas claro para texto/
+   fondo, pero este pulso es un efecto de foco puntual, no texto -- se deja
+   el mismo rojo intenso en los dos temas para que siga leyendose como
+   "alerta" sin desentonar). */
 @keyframes pulse-border {
   0% { box-shadow: 0 0 0 0 rgba(208, 59, 59, 0.4); }
   70% { box-shadow: 0 0 0 4px rgba(208, 59, 59, 0); }

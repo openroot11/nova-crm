@@ -294,7 +294,7 @@ function reportCardHtml(data) {
       </section>
 
       <div class="px-5 py-3 bg-surface-container-low text-center text-[11px] text-on-surface-variant border-t border-outline-variant">
-        Nova CRM · Manufacturas y Diseños
+        Velara CRM · Velara Taller S.A.S.
       </div>
     </div>
   `;

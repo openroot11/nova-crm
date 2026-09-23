@@ -29,8 +29,8 @@ router.put('/ad-spend/:month', async (req, res) => {
 
   await db
     .prepare(
-      `INSERT INTO ad_spend (month, amount, updated_at) VALUES (?, ?, now_utc_text())
-       ON CONFLICT(month) DO UPDATE SET amount = excluded.amount, updated_at = now_utc_text()`
+      `INSERT INTO ad_spend (month, amount, source, updated_at) VALUES (?, ?, 'manual', datetime('now'))
+       ON CONFLICT(month) DO UPDATE SET amount = excluded.amount, source = 'manual', updated_at = datetime('now')`
     )
     .run(month, amount);
 

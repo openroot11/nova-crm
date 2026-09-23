@@ -68,7 +68,7 @@ export async function mount(container, ctx) {
 
     <div class="bg-surface-container-lowest border border-outline-variant rounded-xl p-gutter shadow-sm mt-gutter">
       <h3 class="text-headline-md font-headline-md text-on-surface mb-3">Qué representa este módulo</h3>
-      <p class="text-body-md text-on-surface-variant leading-relaxed">Esta vista presenta el siguiente paso de Nova CRM: un módulo de inteligencia artificial que transforma el historial de leads en una proyección de demanda. Usa la información de los días anteriores para anticipar cuántos leads y cuántas ventas esperar, y apoya la presentación de tu clase como una función nueva y estratégica.</p>
+      <p class="text-body-md text-on-surface-variant leading-relaxed">Esta vista presenta el siguiente paso de Velara CRM: un módulo de inteligencia artificial que transforma el historial de leads en una proyección de demanda. Usa la información de los días anteriores para anticipar cuántos leads y cuántas ventas esperar, y apoya la presentación de tu clase como una función nueva y estratégica.</p>
     </div>
   `;
 

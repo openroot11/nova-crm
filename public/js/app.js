@@ -66,6 +66,25 @@ sidebarToggleBtn.addEventListener('click', () => {
   applySidebarCollapsed(sidebarCollapsed);
 });
 
+// Modo oscuro: la clase "dark" en <html> ya la puso (o no) el script en el
+// <head> de index.html antes de pintar nada, para no parpadear -- aquí solo
+// se engancha el botón para alternarla y recordar la preferencia. Mismo
+// localStorage key ("nova_theme") que lee ese script al arrancar.
+const THEME_KEY = 'nova_theme';
+const themeToggleBtn = document.getElementById('theme-toggle-btn');
+const themeToggleIcon = document.getElementById('theme-toggle-icon');
+function applyThemeIcon() {
+  const isDark = document.documentElement.classList.contains('dark');
+  themeToggleIcon.textContent = isDark ? 'light_mode' : 'dark_mode';
+  themeToggleBtn.title = isDark ? 'Cambiar a tema claro' : 'Cambiar a tema oscuro';
+}
+applyThemeIcon();
+themeToggleBtn.addEventListener('click', () => {
+  const isDark = document.documentElement.classList.toggle('dark');
+  localStorage.setItem(THEME_KEY, isDark ? 'dark' : 'light');
+  applyThemeIcon();
+});
+
 const routes = {
   dashboard1: () => import('./views/dashboard1.js'),
   dashboard: () => import('./views/dashboard.js'),
@@ -87,7 +106,7 @@ const titles = {
   dashboard: 'Dashboard 2',
   ventas: 'Registro Operativo',
   seguimiento: 'Seguimiento Activo',
-  cotizaciones: 'Cotizaciones y Ventas',
+  cotizaciones: 'Cotizaciones',
   cotizar: 'Cotizar',
   clientes: 'Clientes',
   informe: 'Informe Diario',
@@ -157,7 +176,7 @@ async function render() {
   });
 
   pageTitle.textContent = titles[route];
-  document.title = `${titles[route]} · Nova CRM`;
+  document.title = `${titles[route]} · Velara CRM`;
 
   if (typeof currentUnmount === 'function') {
     try {

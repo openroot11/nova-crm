@@ -1,22 +1,17 @@
 import { COLOMBIA_BOUNDS, COLOMBIA_OUTLINE, findCity } from '../colombia-cities.js';
 import { escapeHtml, formatMoney } from '../utils.js';
+import { PRODUCTS, PRODUCT_COLORS } from '../data/velaraServices.js';
 
-// Mismo orden categorico que usa el selector de Producto en Alta Rapida, con
-// la paleta de 7 colores distinguibles (cada categoria siempre el mismo
-// color, en el mismo orden, para que el mapa y el resto de la app hablen el
-// mismo idioma visual).
-export const PRODUCTS = ['Carpas', 'Cortinas', 'Gramas', 'Baby Gym', 'Forros', 'Pisos Vinílicos', 'Banderas', 'Otro'];
-export const PRODUCT_COLORS = {
-  Carpas: '#2a78d6',
-  Cortinas: '#eb6834',
-  Gramas: '#1baf7a',
-  'Baby Gym': '#eda100',
-  Forros: '#e87ba4',
-  'Pisos Vinílicos': '#008300',
-  Banderas: '#e34948',
-  Otro: '#4a3aa7',
-};
+export { PRODUCTS, PRODUCT_COLORS };
 const FALLBACK_COLOR = '#8a8578';
+
+// El mapa es SVG crudo (no hereda clases de Tailwind), asi que para que el
+// fondo/tierra/texto tambien respeten el modo oscuro (ver #theme-vars en
+// index.html) se leen las mismas variables CSS de la app en vez de hex fijos.
+function cssVar(name, fallback) {
+  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return v || fallback;
+}
 
 function project(lat, lng, w, h) {
   const { latMin, latMax, lngMin, lngMax } = COLOMBIA_BOUNDS;
@@ -34,6 +29,10 @@ function project(lat, lng, w, h) {
 export function renderColombiaMap(root, cities) {
   const W = 420;
   const H = 520;
+  const oceanColor = cssVar('--c-surface-container-low', '#eaf1fb');
+  const landFill = cssVar('--c-surface-container-high', '#e3ecdc');
+  const landStroke = cssVar('--c-outline', '#a9bb9c');
+  const labelColor = cssVar('--c-on-surface-variant', '#5B6368');
   const plotted = cities.filter((c) => findCity(c.city));
   const maxLeads = Math.max(1, ...plotted.map((c) => c.leads));
   const MIN_R = 7;
@@ -54,21 +53,21 @@ export function renderColombiaMap(root, cities) {
       return `
       <g class="city-marker" data-city="${escapeHtml(c.city)}" data-leads="${c.leads}" data-ventas="${c.ganados}" data-tasa="${c.tasa_conversion}" data-monto="${c.monto}" data-producto="${escapeHtml(c.producto_top || 'Sin datos')}" style="cursor:pointer;">
         <circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${r.toFixed(1)}" fill="${color}" fill-opacity="0.78" stroke="${color}" stroke-width="1.5" />
-        <text x="${x.toFixed(1)}" y="${(y + r + 12).toFixed(1)}" text-anchor="middle" font-size="10" fill="#5B6368" font-family="ui-sans-serif, system-ui, sans-serif">${escapeHtml(c.city)}</text>
+        <text x="${x.toFixed(1)}" y="${(y + r + 12).toFixed(1)}" text-anchor="middle" font-size="10" fill="${labelColor}" font-family="ui-sans-serif, system-ui, sans-serif">${escapeHtml(c.city)}</text>
       </g>`;
     })
     .join('');
 
   const emptyMsg =
     plotted.length === 0
-      ? `<text x="${W / 2}" y="${H / 2}" text-anchor="middle" font-size="13" fill="#8B9095">Aún no hay leads con ciudad registrada en este rango</text>`
+      ? `<text x="${W / 2}" y="${H / 2}" text-anchor="middle" font-size="13" fill="${labelColor}">Aún no hay leads con ciudad registrada en este rango</text>`
       : '';
 
   root.innerHTML = `
     <div class="relative" style="height:480px;">
-      <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" style="display:block;width:100%;height:100%;background:#eaf1fb;border-radius:12px;">
-        <rect x="0" y="0" width="${W}" height="${H}" fill="#eaf1fb" />
-        <path d="${outlinePath}" fill="#e3ecdc" stroke="#a9bb9c" stroke-width="1.5" stroke-linejoin="round" />
+      <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" style="display:block;width:100%;height:100%;background:${oceanColor};border-radius:12px;">
+        <rect x="0" y="0" width="${W}" height="${H}" fill="${oceanColor}" />
+        <path d="${outlinePath}" fill="${landFill}" stroke="${landStroke}" stroke-width="1.5" stroke-linejoin="round" />
         ${markers}
         ${emptyMsg}
       </svg>

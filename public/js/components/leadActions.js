@@ -1,8 +1,7 @@
 import { openModal, confirmModal } from './modal.js';
 import { escapeHtml } from '../utils.js';
 import { COLOMBIA_CITY_NAMES } from '../colombia-cities.js';
-
-const EDIT_PRODUCTS = ['Carpas', 'Cortinas', 'Gramas', 'Baby Gym', 'Forros', 'Pisos Vinílicos', 'Banderas', 'Otro'];
+import { PRODUCTS as EDIT_PRODUCTS } from '../data/velaraServices.js';
 const EDIT_SOURCES = ['WhatsApp', 'Correo', 'Llamada', 'Otro'];
 const EDIT_CHANNEL_DETAILS = ['Google Ads', 'Orgánico', 'Referido', 'Otro'];
 
@@ -200,7 +199,7 @@ export function markQuoted(lead, ctx, onDone) {
 // ===========================================================================
 //  Cotización → Venta (motor: Odoo)
 // ===========================================================================
-// Flujo completo, sin salir de Nova CRM:
+// Flujo completo, sin salir de Velara CRM:
 //   1. openQuotationModal   -> arma el sale.order en Odoo (líneas, IVA, total, PDF)
 //   2. openQuotationViewModal -> ver / editar / enviar una cotización ya creada
 //   3. "Confirmar venta"    -> abre openCloseModal; al cerrar "ganado" el

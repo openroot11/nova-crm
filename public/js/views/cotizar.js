@@ -1,8 +1,9 @@
 import { escapeHtml, formatMoney, initials } from '../utils.js';
 import { openCloseModal } from '../components/leadActions.js';
+import { SERVICES, findService } from '../data/velaraServices.js';
 
-// Pestaña "Cotizar": motor de cotizaciones propio de Nova CRM, sin ninguna
-// dependencia de Odoo -- guarda todo en las tablas nativas del CRM
+// Pestaña "Cotizar": motor de cotizaciones propio de Velara CRM, sin
+// ninguna dependencia de Odoo -- guarda todo en las tablas nativas del CRM
 // (server/nativeQuotes.js: quotations/quotation_lines/products) para que
 // esta pantalla siga funcionando aunque en algún momento el negocio deje de
 // usar Odoo en conjunto con el CRM. El flujo viejo (botón "Cotizar" en
@@ -10,19 +11,17 @@ import { openCloseModal } from '../components/leadActions.js';
 // leadActions.js openQuotationModal) sigue existiendo tal cual, aparte; esta
 // pestaña es la única que usa el motor nativo por ahora.
 //
-// Todo en UNA sola pantalla (buscar/crear cliente + armar la cotización),
-// sin pasar de una vista de "buscador" a otra de "formulario" -- el
-// buscador de cliente es solo el primer campo de este mismo formulario.
-// Datos de cliente pensados para una cotización formal (NIT, dirección,
-// correo, ciudad), más funciones tipo Salesforce/Odoo CPQ: descripción y
-// descuento % por línea, reordenar líneas, duplicar ("Clone") una
-// cotización para armar una revisión, historial de cotizaciones del mismo
-// lead, y compartir por WhatsApp.
+// Layout de dos columnas (izq: pasos 1-4, der: panel de resumen fijo) sobre
+// el concepto de Velara: cliente -> servicio (con sus propios campos --
+// marca/modelo/año para tapicería, dimensiones para carpas, etc., ver
+// server/velaraServices.js) -> detalle de la cotización -> notas.
 
 const STATE_STEPS = [
-  { key: 'draft', label: 'Cotización', icon: 'edit_note' },
+  { key: 'draft', label: 'Borrador', icon: 'edit_note' },
   { key: 'sent', label: 'Enviada', icon: 'send' },
-  { key: 'sale', label: 'Pedido de venta', icon: 'task_alt' },
+  { key: 'seguimiento', label: 'Seguimiento', icon: 'schedule' },
+  { key: 'aprobada', label: 'Aprobada', icon: 'thumb_up' },
+  { key: 'sale', label: 'Venta', icon: 'task_alt' },
 ];
 
 const IVA_RATE = 0.19;
@@ -52,10 +51,19 @@ function daysUntil(isoDate) {
 const STATE_BADGE = {
   draft: 'bg-surface-container-high text-on-surface-variant',
   sent: 'bg-tertiary-container text-on-tertiary-container',
-  sale: 'bg-secondary-container text-on-secondary-container',
+  seguimiento: 'bg-tertiary-container text-on-tertiary-container',
+  aprobada: 'bg-secondary-container text-on-secondary-container',
+  sale: 'bg-primary-container text-on-primary-container',
   cancel: 'bg-error-container text-on-error-container',
 };
-const STATE_LABEL = { draft: 'Borrador', sent: 'Enviada', sale: 'Confirmada', cancel: 'Cancelada' };
+const STATE_LABEL = {
+  draft: 'Borrador',
+  sent: 'Enviada',
+  seguimiento: 'En seguimiento',
+  aprobada: 'Aprobada',
+  sale: 'Venta',
+  cancel: 'Cancelada',
+};
 
 function field(id, label, value, opts = {}) {
   const { type = 'text', required = false, readonly = false, span = '' } = opts;
@@ -66,11 +74,31 @@ function field(id, label, value, opts = {}) {
     </div>`;
 }
 
+// Tarjeta de un paso numerado (1 Cliente / 2 Servicio / 3 Detalle / 4 Notas)
+// -- mismo gesto visual en las 4, círculo con el número en acento.
+function stepCard(number, icon, title, desc, innerHtml, extraHeaderHtml = '') {
+  return `
+    <div class="bg-surface rounded-xl border border-outline-variant shadow-sm p-5">
+      <div class="flex items-center justify-between gap-3 mb-3 flex-wrap">
+        <div class="flex items-center gap-3">
+          <span class="w-7 h-7 rounded-full bg-primary text-on-primary flex items-center justify-center text-body-sm font-bold shrink-0">${number}</span>
+          <div>
+            <h3 class="text-body-md font-body-md font-bold text-on-surface flex items-center gap-1.5"><span class="material-symbols-outlined text-[16px] text-on-surface-variant">${icon}</span>${title}</h3>
+            ${desc ? `<p class="text-[11px] text-on-surface-variant">${desc}</p>` : ''}
+          </div>
+        </div>
+        ${extraHeaderHtml}
+      </div>
+      ${innerHtml}
+    </div>
+  `;
+}
+
 export async function mount(container, ctx) {
   container.innerHTML = `
     <div class="mb-gutter">
       <h2 class="text-headline-lg font-headline-lg text-on-surface mb-base">Cotizar</h2>
-      <p class="text-body-md font-body-md text-on-surface-variant">Busca un cliente (o registra uno nuevo) y arma su cotización en la misma pantalla: datos de facturación, productos, descuentos e impuestos -- guardado directo en Nova, sin pasar por Odoo.</p>
+      <p class="text-body-md font-body-md text-on-surface-variant">Busca un cliente (o registra uno nuevo), elige el servicio y arma su cotización en la misma pantalla -- guardado directo en Velara CRM, sin pasar por Odoo.</p>
     </div>
     <div id="cz-root"></div>
   `;
@@ -80,6 +108,8 @@ export async function mount(container, ctx) {
   let lead = null; // null = cliente aun no elegido/creado
   let quotation = null; // última cotización nativa leída/creada para el lead
   let history = []; // todas las cotizaciones nativas del lead (para el historial)
+  let selectedServiceSlug = null;
+  let serviceFieldValues = {};
   let advisorsCache = [];
   if (ctx.user?.role !== 'asesor') {
     try {
@@ -107,16 +137,20 @@ export async function mount(container, ctx) {
     } catch (err) {
       ctx.toast(err.message, 'error');
     }
+    selectedServiceSlug = quotation ? quotation.service_slug || null : null;
+    serviceFieldValues = quotation ? { ...(quotation.service_fields || {}) } : {};
   }
 
   function resetAll() {
     lead = null;
     quotation = null;
     history = [];
+    selectedServiceSlug = null;
+    serviceFieldValues = {};
     render();
   }
 
-  // ---- barra de estado (draft -> sent -> sale) -------------------------------
+  // ---- barra de estado (draft -> sent -> seguimiento -> aprobada -> sale) ---
   function statusStepper() {
     if (quotation && quotation.state === 'cancel') {
       return `<span class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-body-sm font-bold bg-error-container text-on-error-container"><span class="material-symbols-outlined text-[16px]">cancel</span>Cancelada</span>`;
@@ -124,17 +158,17 @@ export async function mount(container, ctx) {
     const currentKey = quotation ? quotation.state : 'draft';
     const currentIdx = Math.max(0, STATE_STEPS.findIndex((s) => s.key === currentKey));
     return `
-      <div class="flex items-center gap-1.5 flex-wrap">
+      <div class="flex flex-col gap-1.5">
         ${STATE_STEPS.map((s, i) => {
           const done = i < currentIdx;
           const current = i === currentIdx;
-          const cls = current
-            ? 'bg-primary text-on-primary'
-            : done
-              ? 'bg-primary-container text-on-primary-container'
-              : 'bg-surface-container-high text-on-surface-variant';
-          const arrow = i < STATE_STEPS.length - 1 ? '<span class="material-symbols-outlined text-[16px] text-on-surface-variant">chevron_right</span>' : '';
-          return `<span class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-body-sm font-bold ${cls}"><span class="material-symbols-outlined text-[16px]">${done ? 'check_circle' : s.icon}</span>${s.label}</span>${arrow}`;
+          const dotCls = current ? 'bg-primary' : done ? 'bg-primary/60' : 'bg-surface-container-high';
+          const textCls = current ? 'text-on-surface font-bold' : done ? 'text-on-surface-variant' : 'text-on-surface-variant/70';
+          return `
+            <div class="flex items-center gap-2">
+              <span class="w-2.5 h-2.5 rounded-full shrink-0 ${dotCls}"></span>
+              <span class="text-[12px] ${textCls}">${s.label}</span>
+            </div>`;
         }).join('')}
       </div>`;
   }
@@ -156,6 +190,81 @@ export async function mount(container, ctx) {
           })
           .join('')}
       </div>`;
+  }
+
+  // ---- servicio + campos propios (marca/modelo, dimensiones, etc.) -----------
+  function serviceSection() {
+    return stepCard(
+      2,
+      'construction',
+      'Servicio',
+      'Seleccione el servicio y complete los detalles.',
+      `
+      <div class="max-w-xs mb-3">
+        <label class="block text-[10px] font-label-bold uppercase tracking-wide text-on-surface-variant mb-1">Servicio *</label>
+        <select id="cz-service" ${!isEditable() ? 'disabled' : ''} class="w-full p-2 border border-outline-variant rounded-md outline-none focus:border-outline focus:ring-2 focus:ring-outline/20 text-body-sm">
+          <option value="">Seleccione un servicio…</option>
+          ${SERVICES.map((s) => `<option value="${s.slug}" ${s.slug === selectedServiceSlug ? 'selected' : ''}>${escapeHtml(s.title)}</option>`).join('')}
+        </select>
+      </div>
+      <div id="cz-service-fields" class="grid grid-cols-1 md:grid-cols-3 gap-3"></div>
+      `
+    );
+  }
+
+  function renderServiceFields() {
+    const wrap = root.querySelector('#cz-service-fields');
+    if (!wrap) return;
+    const service = findService(selectedServiceSlug);
+    const editable = isEditable();
+    if (!service) {
+      wrap.innerHTML = `<p class="text-[12px] text-on-surface-variant md:col-span-3">Elige un servicio para ver sus campos.</p>`;
+      return;
+    }
+    wrap.innerHTML = service.fields
+      .map((f) => {
+        const value = serviceFieldValues[f.key] || '';
+        if (f.type === 'select') {
+          return `<div>
+            <label class="block text-[10px] font-label-bold uppercase tracking-wide text-on-surface-variant mb-1">${escapeHtml(f.label)}${f.required ? ' *' : ''}</label>
+            <select data-svc-field="${f.key}" ${editable ? '' : 'disabled'} class="w-full p-2 border border-outline-variant rounded-md outline-none focus:border-outline focus:ring-2 focus:ring-outline/20 text-body-sm">
+              <option value="">Seleccione…</option>
+              ${f.options.map((o) => `<option value="${escapeHtml(o)}" ${o === value ? 'selected' : ''}>${escapeHtml(o)}</option>`).join('')}
+            </select>
+          </div>`;
+        }
+        return `<div>
+          <label class="block text-[10px] font-label-bold uppercase tracking-wide text-on-surface-variant mb-1">${escapeHtml(f.label)}${f.required ? ' *' : ''}</label>
+          <input data-svc-field="${f.key}" type="text" ${editable ? '' : 'readonly'} value="${escapeHtml(value)}" placeholder="${escapeHtml(f.placeholder || '')}" class="w-full p-2 border border-outline-variant rounded-md outline-none focus:border-outline focus:ring-2 focus:ring-outline/20 text-body-sm ${editable ? '' : 'bg-surface-container-low text-on-surface-variant'}" />
+        </div>`;
+      })
+      .join('');
+    wrap.querySelectorAll('[data-svc-field]').forEach((el) => {
+      const sync = () => {
+        serviceFieldValues[el.dataset.svcField] = el.value;
+      };
+      el.addEventListener('input', sync);
+      el.addEventListener('change', sync);
+    });
+  }
+
+  function readServiceFields() {
+    const wrap = root.querySelector('#cz-service-fields');
+    const out = {};
+    wrap?.querySelectorAll('[data-svc-field]').forEach((el) => {
+      if (el.value) out[el.dataset.svcField] = el.value;
+    });
+    return out;
+  }
+
+  function wireServiceSection() {
+    const select = root.querySelector('#cz-service');
+    if (!select) return;
+    select.addEventListener('change', () => {
+      selectedServiceSlug = select.value || null;
+      serviceFieldValues = {}; // servicio nuevo -> campos propios distintos, no tiene sentido conservar los del anterior
+      renderServiceFields();
+    });
   }
 
   // ---- líneas de producto -----------------------------------------------------
@@ -181,7 +290,7 @@ export async function mount(container, ctx) {
       totalsEl.innerHTML = `
         <div class="flex justify-between gap-8 text-body-sm text-on-surface-variant"><span>Subtotal</span><span class="font-bold text-on-surface">${formatMoney(quotation.amount_untaxed)}</span></div>
         <div class="flex justify-between gap-8 text-body-sm text-on-surface-variant mt-1"><span>IVA 19%</span><span class="font-bold text-on-surface">${formatMoney(quotation.amount_tax)}</span></div>
-        <div class="flex justify-between gap-8 items-baseline mt-2 pt-2 border-t border-outline-variant"><span class="text-body-md font-bold text-on-surface">Total</span><span class="text-headline-sm font-headline-sm font-bold text-primary">${formatMoney(quotation.amount_total)}</span></div>
+        <div class="flex justify-between gap-8 items-baseline mt-2 pt-2 px-3 -mx-3 rounded-lg bg-primary-container"><span class="text-body-md font-bold text-on-surface">Total</span><span class="text-headline-sm font-headline-sm font-bold text-on-surface">${formatMoney(quotation.amount_total)}</span></div>
       `;
       return;
     }
@@ -190,7 +299,7 @@ export async function mount(container, ctx) {
     totalsEl.innerHTML = `
       <div class="flex justify-between gap-8 text-body-sm text-on-surface-variant"><span>Subtotal</span><span class="font-bold text-on-surface">${formatMoney(sub)}</span></div>
       <div class="flex justify-between gap-8 text-body-sm text-on-surface-variant mt-1"><span>IVA 19%</span><span class="font-bold text-on-surface">${formatMoney(iva)}</span></div>
-      <div class="flex justify-between gap-8 items-baseline mt-2 pt-2 border-t border-outline-variant"><span class="text-body-md font-bold text-on-surface">Total</span><span class="text-headline-sm font-headline-sm font-bold text-primary">${formatMoney(sub + iva)}</span></div>
+      <div class="flex justify-between gap-8 items-baseline mt-2 pt-2 px-3 -mx-3 rounded-lg bg-primary-container"><span class="text-body-md font-bold text-on-surface">Total</span><span class="text-headline-sm font-headline-sm font-bold text-on-surface">${formatMoney(sub + iva)}</span></div>
     `;
     const countEl = root.querySelector('#cz-line-count');
     if (countEl) countEl.textContent = list.querySelectorAll('[data-line]').length;
@@ -417,20 +526,17 @@ export async function mount(container, ctx) {
            </div>`
         : `<div class="md:col-span-3 flex items-center gap-1.5 text-[11px] text-tertiary"><span class="material-symbols-outlined text-[14px]">info</span>Cliente nuevo: solo coordinador/admin puede registrarlo. Busca uno que ya exista.</div>`;
 
-    return `
-      <div class="p-5 border-b border-outline-variant">
-        <div class="flex items-center justify-between gap-3 mb-3">
-          <div class="flex items-center gap-1.5">
-            <span class="material-symbols-outlined text-[18px] text-on-surface-variant">person</span>
-            <h3 class="text-label-bold font-label-bold uppercase tracking-wide text-on-surface-variant">Cliente</h3>
-          </div>
-          ${lead ? `<button type="button" id="cz-change" class="btn btn-ghost text-[11px]"><span class="material-symbols-outlined">swap_horiz</span>Cambiar cliente</button>` : ''}
-        </div>
+    return stepCard(
+      1,
+      'person',
+      'Cliente',
+      'Busque un cliente existente o registre uno nuevo.',
+      `
         ${
           !lead
             ? `<div class="relative max-w-lg mb-3">
                  <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-[18px] text-on-surface-variant pointer-events-none">search</span>
-                 <input id="cz-search" type="text" autocomplete="off" placeholder="Buscar cliente existente por nombre, teléfono o documento…" class="w-full pl-10 pr-3 py-2.5 border border-outline-variant rounded-md outline-none focus:border-outline focus:ring-2 focus:ring-outline/20" />
+                 <input id="cz-search" type="text" autocomplete="off" placeholder="Buscar por nombre, teléfono o documento…" class="w-full pl-10 pr-3 py-2.5 border border-outline-variant rounded-md outline-none focus:border-outline focus:ring-2 focus:ring-outline/20" />
                  <div id="cz-results" class="hidden absolute z-20 mt-1 w-full bg-surface border border-outline-variant rounded-md shadow-lg max-h-72 overflow-y-auto"></div>
                </div>
                <p class="text-[11px] text-on-surface-variant mb-3">¿No aparece? Llena los datos de abajo para registrarlo.</p>`
@@ -443,11 +549,11 @@ export async function mount(container, ctx) {
           ${field('cz-email', 'Correo', lead?.email, { type: 'email' })}
           ${field('cz-address', 'Dirección', lead?.address)}
           ${field('cz-city', 'Ciudad', lead?.city)}
-          ${field('cz-product', 'Producto de interés', lead?.product)}
           ${advisorField}
         </div>
-      </div>
-    `;
+      `,
+      lead ? `<button type="button" id="cz-change" class="btn btn-ghost text-[11px]"><span class="material-symbols-outlined">swap_horiz</span>Cambiar cliente</button>` : ''
+    );
   }
 
   function wireClientSection() {
@@ -516,37 +622,62 @@ export async function mount(container, ctx) {
   }
   document.addEventListener('click', onDocClick);
 
-  // ---- pantalla completa (una sola, siempre) ---------------------------------
-  function render() {
-    const editable = isEditable();
+  // ---- panel de resumen (derecha) --------------------------------------------
+  function summaryPanel() {
     const hasQuotation = !!quotation;
     const badgeCls = hasQuotation ? STATE_BADGE[quotation.state] || STATE_BADGE.draft : STATE_BADGE.draft;
-    const badgeLabel = hasQuotation ? STATE_LABEL[quotation.state] || quotation.state : lead ? 'Nueva' : 'Sin cliente';
+    const badgeLabel = hasQuotation ? STATE_LABEL[quotation.state] || quotation.state : 'Borrador';
     const expiresIn = hasQuotation ? daysUntil(quotation.validity_date) : null;
+    const isCancelled = hasQuotation && quotation.state === 'cancel';
 
-    root.innerHTML = `
-      <div class="flex items-center justify-between flex-wrap gap-3 mb-4">
-        <div class="flex items-center gap-2 text-body-sm text-on-surface-variant min-w-0">
-          <span class="font-bold text-on-surface truncate">${hasQuotation ? escapeHtml(quotation.number) : 'Cotizar'}</span>
-          <span class="px-2 py-0.5 rounded text-[10px] font-bold shrink-0 ${badgeCls}">${badgeLabel}</span>
+    return `
+      <div class="bg-surface rounded-xl border border-outline-variant shadow-sm p-5">
+        <div class="flex items-center gap-2 mb-4">
+          <span class="material-symbols-outlined text-[20px] text-primary">receipt_long</span>
+          <h3 class="text-body-md font-body-md font-bold text-on-surface">Resumen de cotización</h3>
+          <span class="ml-auto px-2 py-0.5 rounded text-[10px] font-bold shrink-0 ${badgeCls}">${badgeLabel}</span>
         </div>
-        <div class="flex flex-wrap gap-2" id="cz-actions"></div>
-      </div>
 
-      <div class="bg-surface rounded-xl border border-outline-variant shadow-sm overflow-hidden">
-        <div class="h-1.5 bg-primary"></div>
+        <div class="space-y-1.5 text-body-sm mb-4">
+          <div class="flex justify-between gap-3"><span class="text-on-surface-variant">N.º de cotización</span><span class="font-bold text-on-surface">${hasQuotation ? escapeHtml(quotation.number) : 'Se asigna al guardar'}</span></div>
+          <div class="flex justify-between gap-3"><span class="text-on-surface-variant">Fecha</span><span class="font-bold text-on-surface">${hasQuotation ? fmtDate(quotation.date_order) : fmtDate(todayIso())}</span></div>
+          <div class="flex justify-between gap-3">
+            <span class="text-on-surface-variant">Válida hasta</span>
+            <span class="font-bold text-on-surface flex items-center gap-1">
+              ${hasQuotation ? fmtDate(quotation.validity_date) : `<span id="cz-validity-date">${fmtDate(addDaysIso(8))}</span>`}
+              ${expiresIn !== null ? `<span class="text-[10px] px-1.5 py-0.5 rounded ${expiresIn < 0 ? 'bg-error-container text-on-error-container' : expiresIn <= 2 ? 'bg-tertiary-container text-on-tertiary-container' : 'bg-surface-container-high text-on-surface-variant'}">${expiresIn < 0 ? 'Vencida' : expiresIn === 0 ? 'Hoy' : `${expiresIn}d`}</span>` : ''}
+            </span>
+          </div>
+        </div>
 
-        ${clientSection()}
+        <div id="cz-totals" class="border-t border-outline-variant pt-3 mb-4"></div>
+
+        <div id="cz-summary-actions" class="flex flex-col gap-2 mb-4"></div>
+
+        <div class="border-t border-outline-variant pt-4 mb-4">
+          <p class="text-[10px] font-label-bold uppercase tracking-wide text-on-surface-variant mb-2 flex items-center gap-1"><span class="material-symbols-outlined text-[14px]">timeline</span>Estado de la cotización</p>
+          ${statusStepper()}
+        </div>
 
         ${
-          hasQuotation
-            ? `<div class="p-5 border-b border-outline-variant flex items-center justify-between flex-wrap gap-3">
-                 ${statusStepper()}
-                 <div class="flex items-center gap-4 text-[12px] text-on-surface-variant">
-                   <span class="flex items-center gap-1"><span class="material-symbols-outlined text-[15px]">format_list_numbered</span><span id="cz-line-count">${quotation.lines.length}</span> líneas</span>
+          hasQuotation && !isCancelled
+            ? `<div class="border-t border-outline-variant pt-4">
+                 <p class="text-[10px] font-label-bold uppercase tracking-wide text-on-surface-variant mb-2">Acciones adicionales</p>
+                 <div class="flex flex-col gap-1">
+                   <button type="button" id="cz-duplicate" class="text-left text-body-sm text-on-surface hover:text-primary flex items-center gap-1.5 py-1"><span class="material-symbols-outlined text-[16px]">content_copy</span>Duplicar cotización</button>
                    ${
-                     expiresIn !== null
-                       ? `<span class="flex items-center gap-1 ${expiresIn < 0 ? 'text-error font-bold' : expiresIn <= 2 ? 'text-tertiary font-bold' : ''}"><span class="material-symbols-outlined text-[15px]">schedule</span>${expiresIn < 0 ? 'Vencida' : expiresIn === 0 ? 'Vence hoy' : `Vence en ${expiresIn}d`}</span>`
+                     quotation.state !== 'sale'
+                       ? `<button type="button" id="cz-confirm" class="text-left text-body-sm text-on-surface hover:text-primary flex items-center gap-1.5 py-1"><span class="material-symbols-outlined text-[16px]">task_alt</span>Convertir en venta</button>`
+                       : ''
+                   }
+                   ${
+                     lead?.client_id
+                       ? `<button type="button" id="cz-view-client" class="text-left text-body-sm text-on-surface hover:text-primary flex items-center gap-1.5 py-1"><span class="material-symbols-outlined text-[16px]">badge</span>Ver historial del cliente</button>`
+                       : ''
+                   }
+                   ${
+                     quotation.state !== 'sale'
+                       ? `<button type="button" id="cz-cancel" class="text-left text-body-sm text-error hover:text-error/80 flex items-center gap-1.5 py-1"><span class="material-symbols-outlined text-[16px]">cancel</span>Cancelar cotización</button>`
                        : ''
                    }
                  </div>
@@ -554,44 +685,103 @@ export async function mount(container, ctx) {
             : ''
         }
 
-        ${historyStrip()}
+        <p class="mt-4 text-[11px] text-on-surface-variant flex items-start gap-1"><span class="material-symbols-outlined text-[14px] shrink-0">info</span>Esta cotización se guarda en Velara CRM y no genera un pedido automáticamente.</p>
+      </div>
+    `;
+  }
 
-        <div class="p-5 border-b border-outline-variant">
-          <div class="flex items-center justify-between flex-wrap gap-3 mb-3">
-            <div class="flex items-center gap-1.5">
-              <span class="material-symbols-outlined text-[18px] text-on-surface-variant">inventory_2</span>
-              <h3 class="text-label-bold font-label-bold uppercase tracking-wide text-on-surface-variant">Productos</h3>
-            </div>
-            ${
-              !hasQuotation
-                ? `<div class="flex items-center gap-1.5">
-                     <label class="text-[11px] text-on-surface-variant">Válida por</label>
-                     <input id="cz-validity" type="number" min="1" value="8" class="w-14 p-1 border border-outline-variant rounded-md outline-none focus:border-outline text-body-sm" />
-                     <span class="text-[11px] text-on-surface-variant">días · vence <span id="cz-validity-date">${fmtDate(addDaysIso(8))}</span></span>
-                   </div>`
-                : `<span class="text-[11px] text-on-surface-variant flex items-center gap-1"><span class="material-symbols-outlined text-[14px]">event_available</span>Válida hasta ${fmtDate(quotation.validity_date)}</span>`
-            }
-          </div>
-          <div id="cz-lines"></div>
-          ${editable ? `<button type="button" id="cz-add-line" class="btn btn-ghost mt-1 text-[12px]"><span class="material-symbols-outlined">add</span>Agregar un producto</button>` : ''}
+  const NEXT_STATE_ACTION = {
+    draft: { label: 'Marcar como enviada', fn: () => transitionState('send', 'Cotización marcada como enviada') },
+    sent: { label: 'Marcar en seguimiento', fn: () => transitionState('seguimiento', 'Cotización en seguimiento') },
+    seguimiento: { label: 'Marcar como aprobada', fn: () => transitionState('aprobar', 'Cotización marcada como aprobada') },
+  };
+
+  function renderSummaryActions() {
+    const el = root.querySelector('#cz-summary-actions');
+    if (!el) return;
+    if (!quotation) {
+      el.innerHTML = '';
+      return;
+    }
+    const buttons = [];
+    if (lead?.phone) {
+      buttons.push(
+        `<button type="button" id="cz-whatsapp" class="btn btn-primary w-full justify-center"><span class="material-symbols-outlined">chat</span>Compartir por WhatsApp</button>`
+      );
+    }
+    buttons.push(
+      `<a href="/api/quotations/${quotation.id}/pdf" target="_blank" rel="noopener" class="btn btn-secondary w-full justify-center inline-flex"><span class="material-symbols-outlined">picture_as_pdf</span>Descargar PDF</a>`
+    );
+    const next = quotation.state !== 'cancel' ? NEXT_STATE_ACTION[quotation.state] : null;
+    if (next) {
+      buttons.push(`<button type="button" id="cz-next-state" class="btn btn-secondary w-full justify-center">${next.label}</button>`);
+    }
+    el.innerHTML = buttons.join('');
+    el.querySelector('#cz-whatsapp')?.addEventListener('click', sendWhatsApp);
+    el.querySelector('#cz-next-state')?.addEventListener('click', (e) => {
+      e.currentTarget.disabled = true;
+      next.fn();
+    });
+  }
+
+  // ---- pantalla completa (una sola, siempre) ---------------------------------
+  function render() {
+    root.innerHTML = `
+      <div class="flex items-center justify-between flex-wrap gap-3 mb-4">
+        <div class="flex items-center gap-2 text-body-sm text-on-surface-variant min-w-0">
+          <span class="font-bold text-on-surface truncate">${quotation ? escapeHtml(quotation.number) : 'Nueva cotización'}</span>
+        </div>
+        <div class="flex flex-wrap gap-2" id="cz-actions"></div>
+      </div>
+
+      <div class="grid grid-cols-1 lg:grid-cols-[1fr_340px] gap-gutter items-start">
+        <div class="flex flex-col gap-gutter">
+          ${clientSection()}
+          ${serviceSection()}
+          ${stepCard(
+            3,
+            'inventory_2',
+            'Detalle de la cotización',
+            'Agregue los conceptos y precios.',
+            `
+              ${
+                !quotation
+                  ? `<div class="flex items-center gap-1.5 mb-3">
+                       <label class="text-[11px] text-on-surface-variant">Válida por</label>
+                       <input id="cz-validity" type="number" min="1" value="8" class="w-14 p-1 border border-outline-variant rounded-md outline-none focus:border-outline text-body-sm" />
+                       <span class="text-[11px] text-on-surface-variant">días</span>
+                     </div>`
+                  : ''
+              }
+              <div id="cz-lines"></div>
+              ${isEditable() ? `<button type="button" id="cz-add-line" class="btn btn-ghost mt-1 text-[12px]"><span class="material-symbols-outlined">add</span>Agregar concepto</button>` : ''}
+            `
+          )}
+          ${
+            !quotation
+              ? stepCard(
+                  4,
+                  'sticky_note_2',
+                  'Notas y condiciones',
+                  'Incluya información adicional, tiempos de entrega o condiciones.',
+                  `<textarea id="cz-note" rows="3" placeholder="Opcional — se incluye en el PDF de la cotización" class="w-full p-2.5 border border-outline-variant rounded-md outline-none focus:border-outline focus:ring-2 focus:ring-outline/20"></textarea>`
+                )
+              : quotation.note
+                ? stepCard(4, 'sticky_note_2', 'Notas y condiciones', '', `<p class="text-body-sm text-on-surface-variant">${escapeHtml(quotation.note)}</p>`)
+                : ''
+          }
+          ${historyStrip()}
         </div>
 
-        ${
-          !hasQuotation
-            ? `<div class="p-5 border-b border-outline-variant">
-                 <label class="block text-label-bold font-label-bold uppercase tracking-wide text-on-surface-variant mb-1">Notas / términos</label>
-                 <textarea id="cz-note" rows="2" placeholder="Opcional — se incluye en el PDF de la cotización" class="w-full p-2.5 border border-outline-variant rounded-md outline-none focus:border-outline focus:ring-2 focus:ring-outline/20"></textarea>
-               </div>`
-            : ''
-        }
-
-        <div class="p-5 flex justify-end">
-          <div id="cz-totals" class="w-full max-w-xs"></div>
+        <div class="lg:sticky lg:top-4">
+          ${summaryPanel()}
         </div>
       </div>
     `;
 
     wireClientSection();
+    wireServiceSection();
+    renderServiceFields();
     root.querySelector('#cz-validity')?.addEventListener('input', (e) => {
       const days = Number(e.target.value) || 0;
       const hint = root.querySelector('#cz-validity-date');
@@ -606,7 +796,8 @@ export async function mount(container, ctx) {
     });
 
     const list = root.querySelector('#cz-lines');
-    if (hasQuotation) {
+    const editable = isEditable();
+    if (quotation) {
       quotation.lines.forEach((l) => appendLineRow(list, l, editable));
     } else {
       appendLineRow(list, null, true);
@@ -614,48 +805,25 @@ export async function mount(container, ctx) {
     root.querySelector('#cz-add-line')?.addEventListener('click', () => appendLineRow(list, null, true));
 
     renderTotals();
+    renderSummaryActions();
     renderActions();
+
+    root.querySelector('#cz-duplicate')?.addEventListener('click', duplicateQuotation);
+    root.querySelector('#cz-confirm')?.addEventListener('click', convertToSale);
+    root.querySelector('#cz-cancel')?.addEventListener('click', cancelQuotation);
+    root.querySelector('#cz-view-client')?.addEventListener('click', () => ctx.navigate('clientes', { open: lead.client_id }));
   }
 
   function renderActions() {
     const actionsEl = root.querySelector('#cz-actions');
     if (!actionsEl) return;
-    const editable = isEditable();
-    const buttons = [];
-    if (editable) {
-      const label = quotation ? 'Guardar cambios' : lead ? 'Guardar cotización' : 'Registrar y cotizar';
-      buttons.push(`<button type="button" id="cz-save" class="btn btn-primary">${label}</button>`);
+    if (!isEditable()) {
+      actionsEl.innerHTML = '';
+      return;
     }
-    if (quotation && quotation.state === 'draft') {
-      buttons.push(`<button type="button" id="cz-send" class="btn btn-secondary">Marcar como enviada</button>`);
-    }
-    if (quotation) {
-      buttons.push(
-        `<a href="/api/quotations/${quotation.id}/pdf" target="_blank" rel="noopener" class="btn btn-secondary inline-flex"><span class="material-symbols-outlined">picture_as_pdf</span>PDF</a>`
-      );
-      buttons.push(`<button type="button" id="cz-whatsapp" class="btn btn-secondary"><span class="material-symbols-outlined">chat</span>WhatsApp</button>`);
-      buttons.push(`<button type="button" id="cz-duplicate" class="btn btn-secondary"><span class="material-symbols-outlined">content_copy</span>Duplicar</button>`);
-    }
-    if (quotation && quotation.state !== 'sale' && quotation.state !== 'cancel') {
-      buttons.push(`<button type="button" id="cz-confirm" class="btn btn-secondary">Confirmar venta</button>`);
-    }
-    actionsEl.innerHTML = buttons.join('');
-
-    actionsEl.querySelector('#cz-save')?.addEventListener('click', save);
-    actionsEl.querySelector('#cz-send')?.addEventListener('click', markSent);
-    actionsEl.querySelector('#cz-duplicate')?.addEventListener('click', duplicateQuotation);
-    actionsEl.querySelector('#cz-whatsapp')?.addEventListener('click', sendWhatsApp);
-    actionsEl.querySelector('#cz-confirm')?.addEventListener('click', () => {
-      openCloseModal(lead, ctx, async () => {
-        try {
-          await ctx.api.post(`/api/quotations/${quotation.id}/confirm`);
-        } catch {
-          /* el lead ya quedo cerrado en el CRM aunque esto falle; no es bloqueante */
-        }
-        await refreshHistory(quotation.id);
-        render();
-      });
-    });
+    const label = quotation ? 'Guardar cambios' : lead ? 'Guardar cotización' : 'Registrar y cotizar';
+    actionsEl.innerHTML = `<button type="button" id="cz-save" class="btn btn-primary"><span class="material-symbols-outlined">save</span>${label}</button>`;
+    actionsEl.querySelector('#cz-save').addEventListener('click', save);
   }
 
   // Abre WhatsApp Web/app con el chat del cliente y un mensaje ya escrito --
@@ -686,6 +854,44 @@ export async function mount(container, ctx) {
     }
   }
 
+  // Estados intermedios (enviada/seguimiento/aprobada) -- se marcan a mano,
+  // igual que el resto del embudo en este CRM (nada avanza solo).
+  async function transitionState(endpoint, successMsg) {
+    try {
+      await ctx.api.post(`/api/quotations/${quotation.id}/${endpoint}`);
+      ctx.toast(successMsg, 'success');
+      await refreshHistory(quotation.id);
+      render();
+    } catch (err) {
+      ctx.toast(err.message, 'error');
+      render();
+    }
+  }
+
+  function convertToSale() {
+    openCloseModal(lead, ctx, async () => {
+      try {
+        await ctx.api.post(`/api/quotations/${quotation.id}/confirm`);
+      } catch {
+        /* el lead ya quedo cerrado en el CRM aunque esto falle; no es bloqueante */
+      }
+      await refreshHistory(quotation.id);
+      render();
+    });
+  }
+
+  async function cancelQuotation() {
+    if (!confirm(`¿Cancelar la cotización ${quotation.number}? Esta acción no se puede deshacer.`)) return;
+    try {
+      await ctx.api.post(`/api/quotations/${quotation.id}/cancel`);
+      ctx.toast('Cotización cancelada', 'success');
+      await refreshHistory(quotation.id);
+      render();
+    } catch (err) {
+      ctx.toast(err.message, 'error');
+    }
+  }
+
   // Un solo botón hace todo: si el cliente es nuevo lo crea (o actualiza sus
   // datos si ya existía) y crea/actualiza la cotización -- así la búsqueda y
   // el formulario de cotización quedan en una sola pantalla, un solo guardado.
@@ -702,6 +908,20 @@ export async function mount(container, ctx) {
       ctx.toast('Agrega al menos un producto con cantidad', 'error');
       return;
     }
+
+    const service_slug = root.querySelector('#cz-service')?.value || null;
+    if (!service_slug) {
+      ctx.toast('Selecciona un servicio', 'error');
+      return;
+    }
+    const service = findService(service_slug);
+    const service_fields = readServiceFields();
+    const missing = service?.fields.find((f) => f.required && !service_fields[f.key]);
+    if (missing) {
+      ctx.toast(`Falta "${missing.label}" para ${service.title}`, 'error');
+      return;
+    }
+
     const fields = {
       client_name: name,
       phone,
@@ -709,7 +929,11 @@ export async function mount(container, ctx) {
       email: root.querySelector('#cz-email').value.trim(),
       address: root.querySelector('#cz-address').value.trim(),
       city: root.querySelector('#cz-city').value.trim(),
-      product: root.querySelector('#cz-product').value.trim(),
+      // El "producto" del lead queda sincronizado con el servicio elegido en
+      // esta cotización -- el desplegable de "Producto de interés" que
+      // vivía en esta pantalla se reemplazó por el paso "Servicio" de abajo,
+      // pero el lead sigue necesitando ese dato para Estadísticas/Dashboard.
+      product: service.title,
     };
 
     const btn = root.querySelector('#cz-save');
@@ -732,12 +956,12 @@ export async function mount(container, ctx) {
 
       let r;
       if (quotation) {
-        r = await ctx.api.put(`/api/quotations/${quotation.id}`, { lines });
+        r = await ctx.api.put(`/api/quotations/${quotation.id}`, { lines, service_slug, service_fields });
         ctx.toast('Cotización actualizada', 'success');
       } else {
         const validity_days = Number(root.querySelector('#cz-validity')?.value) || 8;
         const note = root.querySelector('#cz-note')?.value.trim() || undefined;
-        r = await ctx.api.post(`/api/leads/${lead.id}/quotations`, { lines, validity_days, note });
+        r = await ctx.api.post(`/api/leads/${lead.id}/quotations`, { lines, validity_days, note, service_slug, service_fields });
         ctx.toast('Cotización creada', 'success');
       }
       await refreshHistory(r.quotation.id);
@@ -749,28 +973,15 @@ export async function mount(container, ctx) {
     }
   }
 
-  async function markSent() {
-    const btn = root.querySelector('#cz-send');
-    btn.disabled = true;
-    btn.setAttribute('data-loading', '');
-    try {
-      await ctx.api.post(`/api/quotations/${quotation.id}/send`);
-      ctx.toast('Cotización marcada como enviada', 'success');
-      await refreshHistory(quotation.id);
-      render();
-    } catch (err) {
-      ctx.toast(err.message, 'error');
-      btn.disabled = false;
-      btn.removeAttribute('data-loading');
-    }
-  }
-
-  // Deep-link opcional: #/cotizar?lead=123 abre directo esa cotización.
+  // Deep-link opcional: #/cotizar?lead=123 abre esa cotización (la última
+  // activa); con &quotation=45 (ej. desde la pestaña "Cotizaciones") abre
+  // esa cotización puntual del historial, aunque no sea la más reciente.
   const presetLeadId = ctx.routeParams.get('lead');
+  const presetQuotationId = ctx.routeParams.get('quotation');
   if (presetLeadId) {
     try {
       lead = await ctx.api.get(`/api/leads/${presetLeadId}`);
-      await refreshHistory();
+      await refreshHistory(presetQuotationId ? Number(presetQuotationId) : undefined);
     } catch {
       lead = null;
     }

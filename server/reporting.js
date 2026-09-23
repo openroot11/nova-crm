@@ -256,6 +256,21 @@ async function computeProfitabilityReport(fromInput, toInput) {
   const costo_por_venta_crudo = totalVentasRow.c ? Math.round((totalSpend / totalVentasRow.c) * 100) / 100 : null;
   const roi_crudo_pct = totalSpend ? Math.round(((totalVentasRow.ingresos - totalSpend) / totalSpend) * 1000) / 10 : null;
 
+  // Desglose por campaña (ver server/googleAds.js + googleAdsSync.js) --
+  // solo tiene filas si la integración está activa y ya sincronizó al
+  // menos una vez; si no, queda vacío y el frontend oculta esa tabla.
+  const campaigns = await db
+    .prepare(
+      `SELECT campaign_id, campaign_name,
+              SUM(cost) AS cost, SUM(clicks) AS clicks, SUM(impressions) AS impressions,
+              SUM(conversions) AS conversions, SUM(conversions_value) AS conversions_value
+         FROM google_ads_campaign_stats
+        WHERE date >= ? AND date <= ?
+        GROUP BY campaign_id
+        ORDER BY cost DESC`
+    )
+    .all(from, to);
+
   return {
     from,
     to,
@@ -279,6 +294,7 @@ async function computeProfitabilityReport(fromInput, toInput) {
       roi_pct: roi_crudo_pct,
     },
     spend_by_month: spendRows,
+    campaigns,
   };
 }
 

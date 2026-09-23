@@ -178,6 +178,20 @@ export async function mount(container, ctx) {
         <section class="bg-surface-container-lowest border border-outline-variant rounded-xl p-gutter shadow-sm col-span-1 md:col-span-2 mt-4">
           <div class="flex items-center justify-between gap-3 mb-6 border-b border-outline-variant pb-3">
             <div class="flex items-center gap-3">
+              <span class="material-symbols-outlined text-on-surface-variant text-2xl">ads_click</span>
+              <h3 class="text-headline-md font-headline-md text-on-surface">Conexión con Google Ads</h3>
+            </div>
+            <button id="ga-sync-btn" class="bg-surface-container hover:bg-surface-container-high text-on-surface px-4 py-2 rounded-lg text-label-bold font-label-bold border border-outline-variant transition-colors flex items-center gap-2">
+              <span class="material-symbols-outlined text-sm">sync</span> Sincronizar ahora
+            </button>
+          </div>
+          <div id="ga-status" class="text-body-sm font-body-sm text-on-surface-variant">Cargando…</div>
+          <p class="text-[11px] text-on-surface-variant mt-3">La conexión se configura en <code class="bg-surface-container px-1 rounded">server/.env</code> (ver <code class="bg-surface-container px-1 rounded">docs/GOOGLE_ADS_SETUP.md</code>). Trae el gasto por campaña cada ~6h y rellena la inversión de Estadísticas → Rentabilidad de Leads sola (una corrección hecha a mano en un mes nunca se pisa).</p>
+        </section>
+
+        <section class="bg-surface-container-lowest border border-outline-variant rounded-xl p-gutter shadow-sm col-span-1 md:col-span-2 mt-4">
+          <div class="flex items-center justify-between gap-3 mb-6 border-b border-outline-variant pb-3">
+            <div class="flex items-center gap-3">
               <span class="material-symbols-outlined text-on-surface-variant text-2xl">manage_accounts</span>
               <h3 class="text-headline-md font-headline-md text-on-surface">Usuarios y Roles</h3>
             </div>
@@ -360,6 +374,67 @@ export async function mount(container, ctx) {
           : 'Ya estaba todo sincronizado',
         r.error ? 'error' : 'success'
       );
+    } catch (err) {
+      ctx.toast(err.message, 'error');
+    } finally {
+      e.target.disabled = false;
+    }
+  });
+
+  // --- Conexión con Google Ads (solo lectura) --------------------------
+  const gaStatusEl = container.querySelector('#ga-status');
+  const gaSyncBtn = container.querySelector('#ga-sync-btn');
+
+  function gaRow(label, value) {
+    return `<div class="flex gap-2"><span class="w-28 shrink-0 text-on-surface-variant">${label}</span><span class="font-semibold text-on-surface break-all">${escapeHtml(value || '—')}</span></div>`;
+  }
+
+  async function loadGoogleAds() {
+    gaStatusEl.innerHTML = 'Consultando…';
+    let s;
+    try {
+      s = await ctx.api.get('/api/google-ads/status');
+    } catch (err) {
+      gaStatusEl.innerHTML = `<span class="text-error font-semibold">No se pudo consultar el estado (${escapeHtml(err.message)})</span>`;
+      return;
+    }
+    if (!s.enabled) {
+      gaStatusEl.innerHTML = `<span class="inline-flex items-center gap-1 text-on-surface-variant"><span class="w-2 h-2 rounded-full bg-outline-variant"></span>Sin configurar</span> — la integración con Google Ads está apagada; la inversión se sigue registrando a mano en Estadísticas.`;
+      return;
+    }
+    if (s.ok === false) {
+      gaStatusEl.innerHTML = `<span class="inline-flex items-center gap-1 text-error font-semibold"><span class="w-2 h-2 rounded-full bg-error"></span>Configurado, pero no responde</span><p class="mt-1 text-error">${escapeHtml(s.error || 'error desconocido')}</p>`;
+      return;
+    }
+    gaStatusEl.innerHTML = `
+      <div class="inline-flex items-center gap-1.5 mb-3 text-secondary font-semibold"><span class="w-2 h-2 rounded-full bg-secondary"></span>Conectado</div>
+      <div class="space-y-1">
+        ${gaRow('Cuenta', `${s.name || ''} (${s.customer_id})`)}
+        ${gaRow('Moneda', s.currency)}
+        ${gaRow('Últ. sincronización', s.last_sync_at ? s.last_sync_at.replace('T', ' ').slice(0, 19) + ' UTC' : 'aún no corrió')}
+      </div>
+      ${
+        s.last_sync_error
+          ? `<p class="mt-2 text-[11px] text-error">Último error de sincronización: ${escapeHtml(s.last_sync_error)}</p>`
+          : ''
+      }
+      ${
+        s.can_report_conversions
+          ? ''
+          : `<p class="mt-2 text-[11px] text-on-surface-variant">Reportar ventas cerradas como conversión está apagado (falta GOOGLE_ADS_CONVERSION_ACTION_ID).</p>`
+      }
+    `;
+  }
+
+  gaSyncBtn.addEventListener('click', async (e) => {
+    e.target.disabled = true;
+    try {
+      const r = await ctx.api.post('/api/google-ads/sync');
+      ctx.toast(
+        r.error ? `Google Ads: ${r.error}` : `Sincronizado: ${r.rows} fila(s), ${r.months_updated} mes(es) de inversión actualizados`,
+        r.error ? 'error' : 'success'
+      );
+      await loadGoogleAds();
     } catch (err) {
       ctx.toast(err.message, 'error');
     } finally {
@@ -697,5 +772,5 @@ export async function mount(container, ctx) {
     });
   });
 
-  await Promise.all([load(), loadUsers(), loadOdoo(), loadProducts()]);
+  await Promise.all([load(), loadUsers(), loadOdoo(), loadGoogleAds(), loadProducts()]);
 }

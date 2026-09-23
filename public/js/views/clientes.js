@@ -1,10 +1,11 @@
 import { escapeHtml, formatMoney, statusBadge, copyNameBtn, bindCopyButtons } from '../utils.js';
 import { openModal, confirmModal } from '../components/modal.js';
+import { PRODUCTS as ALL_PRODUCTS } from '../data/velaraServices.js';
 
 const PAGE_SIZE = 50;
 // Mismo catalogo que Alta Rapida en ventas.js -- "Otro" se excluye del
 // filtro (ahi guarda texto libre, no un valor fijo que se pueda filtrar).
-const PRODUCTS = ['Carpas', 'Cortinas', 'Gramas', 'Baby Gym', 'Forros', 'Pisos Vinílicos', 'Banderas'];
+const PRODUCTS = ALL_PRODUCTS.filter((p) => p !== 'Otro');
 
 function fieldHtml(id, label, value, placeholder = '') {
   return `

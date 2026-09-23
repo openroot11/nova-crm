@@ -3,8 +3,7 @@ import { COLOMBIA_CITY_NAMES } from '../colombia-cities.js';
 import { renderLeadKanban } from '../components/leadKanban.js';
 import { mountNotifBell } from '../components/notifBell.js';
 import { kpiTile } from '../components/kpiTile.js';
-
-const PRODUCTS = ['Carpas', 'Cortinas', 'Gramas', 'Baby Gym', 'Forros', 'Pisos Vinílicos', 'Banderas', 'Otro'];
+import { PRODUCTS } from '../data/velaraServices.js';
 const SOURCES = ['WhatsApp', 'Correo', 'Llamada', 'Otro'];
 const DEFAULT_SOURCE = 'WhatsApp';
 

@@ -11,8 +11,8 @@ function renderOverlay(firstRun, onSuccess) {
   overlay.innerHTML = `
     <div class="w-full max-w-sm bg-surface rounded-xl shadow-xl border border-outline-variant p-8">
       <div class="flex flex-col items-center mb-6">
-        <img src="/img/logo.png" alt="Manufacturas y Diseños Nova" class="h-16 w-auto mb-3" />
-        <h1 class="text-headline-md font-headline-md font-extrabold text-on-surface text-center">Nova CRM</h1>
+        <img src="/img/logo-mark.png" alt="Velara" class="h-14 w-auto mb-3" />
+        <h1 class="text-headline-md font-headline-md font-extrabold text-on-surface text-center">Velara CRM</h1>
         <p class="text-body-sm font-body-sm text-on-surface-variant text-center mt-1">
           ${firstRun ? 'Crea la primera cuenta de administrador para iniciar el control de ventas.' : 'Ingresa con tu usuario para acceder al sistema.'}
         </p>

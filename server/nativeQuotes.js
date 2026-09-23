@@ -40,7 +40,15 @@ async function readQuotation(id) {
   const q = await db.prepare('SELECT * FROM quotations WHERE id = ?').get(id);
   if (!q) return null;
   const lines = await db.prepare('SELECT * FROM quotation_lines WHERE quotation_id = ? ORDER BY position ASC, id ASC').all(id);
-  return { ...q, lines, is_confirmed: q.state === 'sale' };
+  let service_fields = {};
+  if (q.service_fields) {
+    try {
+      service_fields = JSON.parse(q.service_fields);
+    } catch {
+      service_fields = {};
+    }
+  }
+  return { ...q, service_fields, lines, is_confirmed: q.state === 'sale' };
 }
 
 // Reescribe TODAS las lineas de una cotizacion (se usa tanto al crearla como
@@ -84,8 +92,16 @@ async function duplicateQuotation(sourceId, createdBy) {
   const days = source.validity_days || 8;
   const validityDate = new Date(Date.now() + days * 86400000).toISOString().slice(0, 10);
   const info = await db
-    .prepare('INSERT INTO quotations (lead_id, validity_days, validity_date, note, created_by) VALUES (?, ?, ?, ?, ?)')
-    .run(source.lead_id, days, validityDate, source.note, createdBy || null);
+    .prepare('INSERT INTO quotations (lead_id, validity_days, validity_date, note, created_by, service_slug, service_fields) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .run(
+      source.lead_id,
+      days,
+      validityDate,
+      source.note,
+      createdBy || null,
+      source.service_slug || null,
+      Object.keys(source.service_fields || {}).length ? JSON.stringify(source.service_fields) : null
+    );
   const newId = info.lastInsertRowid;
   await db.prepare("UPDATE quotations SET number = printf('COT-%04d', id) WHERE id = ?").run(newId);
   await writeLines(

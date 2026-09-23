@@ -332,6 +332,27 @@ export async function mount(container, ctx) {
       </div>
     </div>
 
+    <div id="campaigns-section" class="bg-surface-container-lowest border border-outline-variant rounded-xl p-gutter shadow-sm mt-gutter hidden">
+      <div class="mb-4">
+        <h3 class="text-headline-md font-headline-md text-on-surface">Desglose por campaña</h3>
+        <p class="text-body-sm font-body-sm text-on-surface-variant">Traído automáticamente de Google Ads para el mismo rango de fechas.</p>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full text-left border-collapse min-w-[560px]">
+          <thead>
+            <tr class="bg-surface-container-low border-b border-outline-variant">
+              <th class="p-table-cell-padding text-label-bold font-label-bold text-on-surface-variant uppercase tracking-wider">Campaña</th>
+              <th class="p-table-cell-padding text-label-bold font-label-bold text-on-surface-variant uppercase tracking-wider text-right">Costo</th>
+              <th class="p-table-cell-padding text-label-bold font-label-bold text-on-surface-variant uppercase tracking-wider text-center">Clics</th>
+              <th class="p-table-cell-padding text-label-bold font-label-bold text-on-surface-variant uppercase tracking-wider text-center">Impresiones</th>
+              <th class="p-table-cell-padding text-label-bold font-label-bold text-on-surface-variant uppercase tracking-wider text-center">Conversiones</th>
+            </tr>
+          </thead>
+          <tbody id="campaigns-tbody" class="divide-y divide-outline-variant"></tbody>
+        </table>
+      </div>
+    </div>
+
     <div class="bg-surface-container-lowest border border-outline-variant rounded-xl p-gutter shadow-sm mt-gutter">
       <div class="flex items-center gap-3 mb-6 border-b border-outline-variant pb-3">
         <span class="material-symbols-outlined text-on-surface-variant text-2xl">history</span>
@@ -934,7 +955,27 @@ export async function mount(container, ctx) {
       ? data.channels.map(channelRowHtml).join('')
       : `<tr><td colspan="5" class="p-table-cell-padding py-8 text-center text-body-sm text-on-surface-variant">Sin leads en este rango.</td></tr>`;
 
+    const campaignsSection = container.querySelector('#campaigns-section');
+    if (data.campaigns && data.campaigns.length) {
+      campaignsSection.classList.remove('hidden');
+      container.querySelector('#campaigns-tbody').innerHTML = data.campaigns.map(campaignRowHtml).join('');
+    } else {
+      campaignsSection.classList.add('hidden');
+    }
+
     loadFlow(profitFrom.value, profitTo.value);
+  }
+
+  function campaignRowHtml(c) {
+    return `
+      <tr>
+        <td class="p-table-cell-padding font-semibold text-on-surface">${escapeHtml(c.campaign_name)}</td>
+        <td class="p-table-cell-padding text-right font-bold">${formatMoney(c.cost)}</td>
+        <td class="p-table-cell-padding text-center">${c.clicks}</td>
+        <td class="p-table-cell-padding text-center">${c.impressions}</td>
+        <td class="p-table-cell-padding text-center text-secondary font-bold">${c.conversions}</td>
+      </tr>
+    `;
   }
 
   // Mismo rango de fechas que Rentabilidad de Leads (arriba) -- son el

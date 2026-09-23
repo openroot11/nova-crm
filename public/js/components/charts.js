@@ -15,7 +15,20 @@ export function destroyChart(canvas) {
   if (canvas) destroyExisting(canvas);
 }
 
-const FONT = { family: "'Inter', system-ui, sans-serif", size: 11 };
+const FONT = { family: "'Manrope', system-ui, sans-serif", size: 11 };
+
+// Chart.js dibuja en <canvas> (no puede heredar color de CSS), asi que para
+// que texto/grid/lineas del chart tambien cambien con el modo oscuro (ver
+// #theme-vars en index.html) se leen las mismas variables CSS en el
+// momento de crear el chart -- cada vista ya recrea sus charts al montar/
+// refrescar, asi que alcanza sin necesitar una reactividad en vivo aparte.
+function cssVar(name, fallback) {
+  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return v || fallback;
+}
+const TICK_COLOR = () => cssVar('--c-on-surface-variant', '#6E6E6E');
+const GRID_COLOR = () => cssVar('--c-outline-variant', '#E2E0DB');
+const SURFACE_COLOR = () => cssVar('--c-surface', '#ffffff');
 
 // Paleta categorica validada (8 tonos, orden fijo -- ver skill dataviz). Ya
 // usada como PRODUCT_COLORS en components/colombiaMap.js; se expone aqui
@@ -28,13 +41,13 @@ export const CATEGORICAL_COLORS = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '
  * solo hex -- para una serie unica no aplica la regla de paleta categorica
  * (identidad), es solo el color de marca.
  */
-export function barChart(canvas, { labels, data, color = '#981b1e', valueFormatter = (v) => v }) {
+export function barChart(canvas, { labels, data, color, valueFormatter = (v) => v }) {
   destroyExisting(canvas);
   return new window.Chart(canvas, {
     type: 'bar',
     data: {
       labels,
-      datasets: [{ data, backgroundColor: color, borderRadius: 4, maxBarThickness: 36 }],
+      datasets: [{ data, backgroundColor: color || cssVar('--c-primary', '#FF5A1F'), borderRadius: 4, maxBarThickness: 36 }],
     },
     options: {
       responsive: true,
@@ -46,11 +59,11 @@ export function barChart(canvas, { labels, data, color = '#981b1e', valueFormatt
         },
       },
       scales: {
-        x: { grid: { display: false }, ticks: { font: FONT, color: '#5b5959' } },
+        x: { grid: { display: false }, ticks: { font: FONT, color: TICK_COLOR() } },
         y: {
           beginAtZero: true,
-          grid: { color: '#e9e9e9' },
-          ticks: { font: FONT, color: '#5b5959', callback: (v) => valueFormatter(v) },
+          grid: { color: GRID_COLOR() },
+          ticks: { font: FONT, color: TICK_COLOR(), callback: (v) => valueFormatter(v) },
         },
       },
     },
@@ -83,16 +96,16 @@ export function groupedBarChart(canvas, { labels, series, valueFormatter = (v) =
         legend: {
           display: true,
           position: 'bottom',
-          labels: { font: FONT, color: '#5b5959', boxWidth: 10, boxHeight: 10, padding: 12 },
+          labels: { font: FONT, color: TICK_COLOR(), boxWidth: 10, boxHeight: 10, padding: 12 },
         },
         tooltip: { callbacks: { label: (ctx) => `${ctx.dataset.label}: ${valueFormatter(ctx.parsed.y)}` } },
       },
       scales: {
-        x: { grid: { display: false }, ticks: { font: FONT, color: '#5b5959' } },
+        x: { grid: { display: false }, ticks: { font: FONT, color: TICK_COLOR() } },
         y: {
           beginAtZero: true,
-          grid: { color: '#e9e9e9' },
-          ticks: { font: FONT, color: '#5b5959', callback: (v) => valueFormatter(v) },
+          grid: { color: GRID_COLOR() },
+          ticks: { font: FONT, color: TICK_COLOR(), callback: (v) => valueFormatter(v) },
         },
       },
     },
@@ -110,7 +123,7 @@ export function donutChart(canvas, { labels, data, colors, cutout = '68%', showL
     type: 'doughnut',
     data: {
       labels,
-      datasets: [{ data, backgroundColor: colors, borderWidth: 2, borderColor: '#ffffff' }],
+      datasets: [{ data, backgroundColor: colors, borderWidth: 2, borderColor: SURFACE_COLOR() }],
     },
     options: {
       responsive: true,
@@ -120,7 +133,7 @@ export function donutChart(canvas, { labels, data, colors, cutout = '68%', showL
         legend: {
           display: showLegend,
           position: 'bottom',
-          labels: { font: FONT, color: '#5b5959', boxWidth: 10, boxHeight: 10, padding: 12 },
+          labels: { font: FONT, color: TICK_COLOR(), boxWidth: 10, boxHeight: 10, padding: 12 },
         },
       },
     },
@@ -148,7 +161,7 @@ export function sankeyChart(canvas, { links, labels, nodeColor }) {
           colorFrom: (ctx) => nodeColor(ctx.dataset.data[ctx.dataIndex].from),
           colorTo: (ctx) => nodeColor(ctx.dataset.data[ctx.dataIndex].to),
           colorMode: 'gradient',
-          color: '#191717',
+          color: cssVar('--c-on-surface', '#1B1B1B'),
           font: FONT,
         },
       ],
@@ -166,14 +179,20 @@ export function sankeyChart(canvas, { links, labels, nodeColor }) {
  * chart (así el mismo primitivo sirve para cualquier meta con cualquier
  * etiqueta).
  */
-export function gaugeChart(canvas, { value, max, color = '#981b1e', trackColor = '#dbdcdd' }) {
+export function gaugeChart(canvas, { value, max, color, trackColor }) {
   destroyExisting(canvas);
   const safeMax = max > 0 ? max : 1;
   const filled = Math.max(0, Math.min(value, safeMax));
   return new window.Chart(canvas, {
     type: 'doughnut',
     data: {
-      datasets: [{ data: [filled, safeMax - filled], backgroundColor: [color, trackColor], borderWidth: 0 }],
+      datasets: [
+        {
+          data: [filled, safeMax - filled],
+          backgroundColor: [color || cssVar('--c-primary', '#FF5A1F'), trackColor || cssVar('--c-surface-container-highest', '#DCD9D2')],
+          borderWidth: 0,
+        },
+      ],
     },
     options: {
       responsive: true,

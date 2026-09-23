@@ -3,14 +3,127 @@
 <head>
 <meta charset="utf-8" />
 <meta content="width=device-width, initial-scale=1.0" name="viewport" />
-<title>Nova CRM</title>
+<title>Velara CRM</title>
 <link rel="icon" type="image/png" href="/img/favicon.png" />
 <link rel="apple-touch-icon" href="/img/favicon.png" />
-<!-- Manifest + service worker: permiten "Instalar Nova CRM" desde el menu
+<!-- Manifest + service worker: permiten "Instalar Velara CRM" desde el menu
      de Brave/Chrome (icono propio, ventana sin barra de navegador, anclable
      a la barra de tareas) en vez de un simple acceso directo a la pestaña. -->
 <link rel="manifest" href="/manifest.json" />
-<meta name="theme-color" content="#981b1e" />
+<meta name="theme-color" content="#FF5A1F" />
+<!-- Aplica el tema ANTES de pintar nada (localStorage -> preferencia del
+     sistema -> claro) para no mostrar un parpadeo del tema equivocado.
+     El resto de la lógica del interruptor vive en public/js/theme.js. -->
+<script>
+  (function () {
+    var saved = null;
+    try { saved = localStorage.getItem('nova_theme'); } catch (e) {}
+    var dark = saved ? saved === 'dark' : window.matchMedia('(prefers-color-scheme: dark)').matches;
+    if (dark) document.documentElement.classList.add('dark');
+  })();
+</script>
+<style id="theme-vars">
+  /* Modo claro (por defecto). Los tokens "fixed" de Material 3 no viven
+     aquí -- por definición no cambian entre claro/oscuro (ver tailwind-config). */
+  :root {
+    --c-surface: #ffffff;
+    --c-surface-container-lowest: #ffffff;
+    --c-surface-container-low: #FAF9F7;
+    --c-surface-container: #F3F2EF;
+    --c-surface-container-high: #E7E5E0;
+    --c-surface-container-highest: #DCD9D2;
+    --c-surface-variant: #E7E5E0;
+    --c-surface-dim: #E7E5E0;
+    --c-surface-bright: #ffffff;
+    --c-background: #FAF9F7;
+    --c-on-surface: #1B1B1B;
+    --c-on-surface-variant: #6E6E6E;
+    --c-on-background: #1B1B1B;
+    --c-outline: #9C9690;
+    --c-outline-variant: #E2E0DB;
+    --c-inverse-surface: #2A2A2A;
+    --c-inverse-on-surface: #F3F2EF;
+
+    --c-primary: #FF5A1F;
+    --c-on-primary: #ffffff;
+    --c-primary-container: #FFE7DA;
+    --c-on-primary-container: #7A2A10;
+    --c-inverse-primary: #FF8F5E;
+    --c-surface-tint: #C7420E;
+
+    --c-secondary: #2a78d6;
+    --c-on-secondary: #ffffff;
+    --c-secondary-container: #dbe9fb;
+    --c-on-secondary-container: #0b3d78;
+
+    --c-tertiary: #A6710A;
+    --c-on-tertiary: #ffffff;
+    --c-tertiary-container: #F5E1B8;
+    --c-on-tertiary-container: #4A3400;
+
+    --c-error: #d03b3b;
+    --c-on-error: #ffffff;
+    --c-error-container: #fbdad8;
+    --c-on-error-container: #7a1410;
+
+    --c-status-good: #0ca30c;
+    --c-status-warning: #fab219;
+    --c-status-serious: #B8791A;
+    --c-status-critical: #d03b3b;
+  }
+
+  /* Modo oscuro: superficies "ink" casi negras, texto casi blanco, y los
+     colores de acento pasados a su variante mas clara (misma logica que
+     usa Material 3: en oscuro, "primary" es el tono claro, "on-primary" el
+     oscuro -- al revés que en claro) para que sigan siendo legibles sobre
+     fondo oscuro sin quemar la vista. */
+  :root.dark {
+    --c-surface: #1B1B1B;
+    --c-surface-container-lowest: #121212;
+    --c-surface-container-low: #201F1D;
+    --c-surface-container: #262421;
+    --c-surface-container-high: #2E2B27;
+    --c-surface-container-highest: #383430;
+    --c-surface-variant: #383430;
+    --c-surface-dim: #121212;
+    --c-surface-bright: #3A3733;
+    --c-background: #121212;
+    --c-on-surface: #F3F2EF;
+    --c-on-surface-variant: #B8B2A8;
+    --c-on-background: #F3F2EF;
+    --c-outline: #8B857C;
+    --c-outline-variant: #48433C;
+    --c-inverse-surface: #F3F2EF;
+    --c-inverse-on-surface: #1B1B1B;
+
+    --c-primary: #FF8F5E;
+    --c-on-primary: #3A1200;
+    --c-primary-container: #7A2A10;
+    --c-on-primary-container: #FFE7DA;
+    --c-inverse-primary: #FF5A1F;
+    --c-surface-tint: #FF8F5E;
+
+    --c-secondary: #8AC0F5;
+    --c-on-secondary: #062347;
+    --c-secondary-container: #14509a;
+    --c-on-secondary-container: #dbe9fb;
+
+    --c-tertiary: #D9A94A;
+    --c-on-tertiary: #2E1F00;
+    --c-tertiary-container: #6B4D00;
+    --c-on-tertiary-container: #F5E1B8;
+
+    --c-error: #FFB4AB;
+    --c-on-error: #690005;
+    --c-error-container: #93000A;
+    --c-on-error-container: #FFDAD6;
+
+    --c-status-good: #22C55E;
+    --c-status-warning: #FFC94D;
+    --c-status-serious: #E0A83D;
+    --c-status-critical: #FF6E6E;
+  }
+</style>
 <script>
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));
@@ -19,7 +132,9 @@
 <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400&display=swap" rel="stylesheet" />
+<!-- Fraunces (titulos, editorial) + Manrope (UI/texto) -- misma pareja
+     tipografica que Velara/sitio (ver Velara/notas/identidad-visual.md). -->
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;0,9..144,500;0,9..144,600;0,9..144,700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-chart-sankey@0.14.0/dist/chartjs-chart-sankey.min.js"></script>
@@ -30,85 +145,71 @@
     theme: {
       extend: {
         colors: {
-          // Paleta de marca Manufacturas y Diseños NOVA (ver diseño/paleta de
-          // colores.png): Blood #981b1e y Lava #ce181e como rojos primarios,
-          // Gainsboro #dbdcdd como gris neutro secundario. primary/surface-*
-          // se derivaron rotando el tono (hue) de la paleta teal-verde
-          // anterior al tono de Blood/Lava (~358°) manteniendo saturacion y
-          // luminosidad de cada token intactas, para no romper ningun
-          // contraste ya afinado -- solo cambia el color, no el "peso"
-          // visual. secondary (azul, exito/dinero) y tertiary (naranja,
-          // riesgo) NO se tocan a proposito: la guia de marca no trae azul
-          // ni naranja, y esos dos tonos son los que hoy distinguen "venta
-          // ganada"/"en riesgo" de "critico" (error) y del rojo de marca --
-          // si tambien fueran rojos, esas alertas se volverian imposibles de
-          // diferenciar de un boton o del nav normal.
-          //
-          // `primary` (el rojo) se reserva a proposito para momentos clave --
-          // el logo y los botones de accion principal (Registrar, Guardar,
-          // Cerrar venta...) -- todo lo demas que antes lo usaba de forma
-          // ambiental (item activo del menu, bordes de foco en inputs,
-          // hovers de botones secundarios/enlaces) pasa a tonos neutros
-          // (`on-surface`/`outline`/`surface-container-*`): mucho rojo en
-          // pantallas de uso constante saturaba visualmente. Los badges de
-          // estado (`primary-fixed`/`primary-container`, ej. "Cotizado") NO
-          // se tocan -- ahi el rosa es parte de un esquema de color por
-          // etapa del embudo, no un acento decorativo.
-          'surface-container-low': '#f9f8f8',
-          'on-secondary-container': '#0b3d78',
-          'surface-container-high': '#eae9e9',
-          'on-primary-container': '#430406',
-          outline: '#858282',
-          'error-container': '#fbdad8',
-          error: '#d03b3b',
-          'primary-fixed': '#f0d6d7',
-          'on-primary': '#ffffff',
-          'tertiary-fixed': '#fde1d3',
-          'surface-container-lowest': '#ffffff',
-          'tertiary-fixed-dim': '#f6b48f',
-          'surface-tint': '#981b1e',
-          'on-error': '#ffffff',
-          'on-surface': '#191717',
-          'on-tertiary-fixed': '#431403',
+          // Paleta de marca VELARA Taller S.A.S. (ver Velara/notas/identidad-
+          // visual.md). Todos los tokens que deben verse distinto en modo
+          // oscuro apuntan a una variable CSS (definida mas abajo en
+          // #theme-vars, :root vs .dark) en vez de un hex fijo -- asi el
+          // interruptor de tema (ver public/js/theme.js) no necesita tocar
+          // ninguna vista: cada `bg-surface`/`text-on-surface`/etc ya
+          // resuelve solo al color correcto. Los tokens "fixed" de Material
+          // 3 (primary-fixed, secondary-fixed, tertiary-fixed y sus
+          // variantes on-*) quedan en hex fijo a proposito -- por definicion
+          // no cambian entre claro/oscuro.
+          'surface-container-low': 'var(--c-surface-container-low)',
+          'on-secondary-container': 'var(--c-on-secondary-container)',
+          'surface-container-high': 'var(--c-surface-container-high)',
+          'on-primary-container': 'var(--c-on-primary-container)',
+          outline: 'var(--c-outline)',
+          'error-container': 'var(--c-error-container)',
+          error: 'var(--c-error)',
+          'primary-fixed': '#FFE7DA',
+          'on-primary': 'var(--c-on-primary)',
+          'tertiary-fixed': '#F5E1B8',
+          'surface-container-lowest': 'var(--c-surface-container-lowest)',
+          'tertiary-fixed-dim': '#D9A94A',
+          'surface-tint': 'var(--c-surface-tint)',
+          'on-error': 'var(--c-on-error)',
+          'on-surface': 'var(--c-on-surface)',
+          'on-tertiary-fixed': '#2E1F00',
           'secondary-fixed-dim': '#9dc4f2',
-          'inverse-surface': '#262424',
-          'on-tertiary-fixed-variant': '#a8461f',
+          'inverse-surface': 'var(--c-inverse-surface)',
+          'on-tertiary-fixed-variant': '#6B4D00',
           'on-secondary-fixed': '#062347',
-          'on-primary-fixed-variant': '#741114',
-          'on-secondary': '#ffffff',
+          'on-primary-fixed-variant': '#7A2A10',
+          'on-secondary': 'var(--c-on-secondary)',
           'secondary-fixed': '#dbe9fb',
-          surface: '#ffffff',
-          'tertiary-container': '#fde1d3',
-          'on-error-container': '#7a1410',
-          'on-surface-variant': '#5b5959',
-          tertiary: '#ec835a',
-          'on-tertiary': '#ffffff',
-          'surface-dim': '#e4e2e2',
-          'surface-bright': '#ffffff',
-          secondary: '#2a78d6',
-          'on-tertiary-container': '#7a2c0f',
+          surface: 'var(--c-surface)',
+          'tertiary-container': 'var(--c-tertiary-container)',
+          'on-error-container': 'var(--c-on-error-container)',
+          'on-surface-variant': 'var(--c-on-surface-variant)',
+          tertiary: 'var(--c-tertiary)',
+          'on-tertiary': 'var(--c-on-tertiary)',
+          'surface-dim': 'var(--c-surface-dim)',
+          'surface-bright': 'var(--c-surface-bright)',
+          secondary: 'var(--c-secondary)',
+          'on-tertiary-container': 'var(--c-on-tertiary-container)',
           'on-secondary-fixed-variant': '#14509a',
-          'surface-variant': '#dbdcdd',
-          'on-background': '#191717',
-          'inverse-primary': '#ce181e',
-          'secondary-container': '#dbe9fb',
-          'primary-container': '#f0d6d7',
-          'outline-variant': '#dbdcdd',
-          'inverse-on-surface': '#f1f0f0',
-          'primary-fixed-dim': '#d67d80',
-          background: '#f5f4f4',
-          'surface-container-highest': '#dbdcdd',
-          primary: '#981b1e',
-          'surface-container': '#f1f0f0',
-          'on-primary-fixed': '#2a0102',
+          'surface-variant': 'var(--c-surface-variant)',
+          'on-background': 'var(--c-on-background)',
+          'inverse-primary': 'var(--c-inverse-primary)',
+          'secondary-container': 'var(--c-secondary-container)',
+          'primary-container': 'var(--c-primary-container)',
+          'outline-variant': 'var(--c-outline-variant)',
+          'inverse-on-surface': 'var(--c-inverse-on-surface)',
+          'primary-fixed-dim': '#FF8F5E',
+          background: 'var(--c-background)',
+          'surface-container-highest': 'var(--c-surface-container-highest)',
+          primary: 'var(--c-primary)',
+          'surface-container': 'var(--c-surface-container)',
+          'on-primary-fixed': '#3A1200',
           // Escala de estado fija (buena/advertencia/grave/critica) para
           // badges de SLA, acciones prioritarias y tablero Kanban -- no se
           // usa para series de graficas (esas usan la paleta categorica ya
           // validada, ver components/colombiaMap.js PRODUCT_COLORS).
-          'status-good': '#0ca30c',
-          'status-warning': '#fab219',
-          'status-serious': '#ec835a',
-          'status-critical': '#d03b3b',
+          'status-good': 'var(--c-status-good)',
+          'status-warning': 'var(--c-status-warning)',
+          'status-serious': 'var(--c-status-serious)',
+          'status-critical': 'var(--c-status-critical)',
         },
         borderRadius: {
           DEFAULT: '0.125rem',
@@ -124,21 +225,24 @@
           'margin-mobile': '16px',
         },
         fontFamily: {
-          'headline-lg': ['Inter', 'system-ui', 'sans-serif'],
-          'headline-md': ['Inter', 'system-ui', 'sans-serif'],
-          'headline-sm': ['Inter', 'system-ui', 'sans-serif'],
-          'body-sm': ['Inter', 'system-ui', 'sans-serif'],
-          'label-bold': ['Inter', 'system-ui', 'sans-serif'],
-          'body-md': ['Inter', 'system-ui', 'sans-serif'],
-          'display-kpi': ['Inter', 'system-ui', 'sans-serif'],
+          // Fraunces (serif editorial) para titulos -- mismo gesto que
+          // Velara/sitio: titulo grande, con caracter. Manrope para todo lo
+          // demas (UI, cuerpo, tablas) -- Fraunces a tamano chico se ve mal.
+          'headline-lg': ['Fraunces', 'Georgia', 'serif'],
+          'headline-md': ['Fraunces', 'Georgia', 'serif'],
+          'headline-sm': ['Fraunces', 'Georgia', 'serif'],
+          'body-sm': ['Manrope', 'system-ui', 'sans-serif'],
+          'label-bold': ['Manrope', 'system-ui', 'sans-serif'],
+          'body-md': ['Manrope', 'system-ui', 'sans-serif'],
+          'display-kpi': ['Fraunces', 'Georgia', 'serif'],
           // Completan la escala pedida en la Fase 2 (display/h1/h2/h3/body/
           // body-sm/label/caption): headline-lg/md/sm ya cubren h1/h2/h3,
           // body-md/body-sm ya cubren body/body-sm, display-kpi ya cubre
           // display -- solo faltaban estos dos. No se renombran los tokens
           // existentes (los usan ~200 sitios en las vistas) para no romper
           // nada sin necesidad.
-          label: ['Inter', 'system-ui', 'sans-serif'],
-          caption: ['Inter', 'system-ui', 'sans-serif'],
+          label: ['Manrope', 'system-ui', 'sans-serif'],
+          caption: ['Manrope', 'system-ui', 'sans-serif'],
         },
         fontSize: {
           'headline-lg': ['30px', { lineHeight: '38px', fontWeight: '600' }],
@@ -259,9 +363,11 @@
 <!-- Sidebar -->
 <nav id="sidebar" class="fixed left-0 top-0 h-screen w-[252px] bg-surface border-r border-outline-variant flex flex-col z-40 transition-transform duration-200 ease-in-out">
   <div class="p-5 flex items-center gap-3">
-    <img src="/img/logo.png" alt="Manufacturas y Diseños Nova" class="h-10 w-auto shrink-0" />
+    <!-- Marca VELARA: logo real del diseñador (cabeza felina de perfil),
+         ver logo.png / logo-mark.png (recorte solo del ícono) en public/img/. -->
+    <img src="/img/logo-mark.png" alt="Velara" class="h-9 w-auto shrink-0" />
     <div class="min-w-0">
-      <h1 class="text-headline-sm font-headline-sm font-extrabold text-on-surface leading-tight truncate">Nova CRM</h1>
+      <h1 class="text-headline-sm font-headline-sm font-extrabold text-on-surface leading-tight truncate">Velara CRM</h1>
       <p class="text-body-sm font-body-sm text-on-surface-variant truncate">Gestión Comercial Operativa</p>
     </div>
   </div>
@@ -318,13 +424,16 @@
       <button id="sidebar-toggle-btn" class="p-2 -ml-2 text-on-surface-variant hover:text-on-surface hover:bg-surface-container-low rounded-lg transition-colors" title="Mostrar/ocultar menú">
         <span class="material-symbols-outlined">menu</span>
       </button>
-      <h2 id="page-title" class="text-headline-sm font-headline-sm font-bold text-on-surface">Nova CRM</h2>
+      <h2 id="page-title" class="text-headline-sm font-headline-sm font-bold text-on-surface">Velara CRM</h2>
     </div>
     <div class="flex items-center gap-4">
       <!-- El buscador y la campana de notificaciones vivian aqui fijos en
            todas las pantallas; ahora cada vista los monta donde le sirven
            (hoy solo Ventas, ver ventas.js) para que este encabezado quede
            limpio en el resto. -->
+      <button id="theme-toggle-btn" class="p-2 text-on-surface-variant hover:text-on-surface hover:bg-surface-container-low rounded-lg transition-colors" title="Cambiar a tema oscuro/claro">
+        <span id="theme-toggle-icon" class="material-symbols-outlined text-[20px]">dark_mode</span>
+      </button>
       <span id="conn-dot" class="w-2 h-2 rounded-full bg-outline-variant ml-1" title="Conectando…"></span>
     </div>
   </header>

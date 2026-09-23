@@ -1,12 +1,12 @@
 {
-  "name": "Nova CRM",
-  "short_name": "Nova CRM",
-  "description": "Gestión Comercial Operativa — Manufacturas y Diseños Nova",
+  "name": "Velara CRM",
+  "short_name": "Velara CRM",
+  "description": "Gestión Comercial Operativa — Velara Taller S.A.S.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "background_color": "#f5f4f4",
-  "theme_color": "#981b1e",
+  "background_color": "#FAF9F7",
+  "theme_color": "#FF5A1F",
   "icons": [
     { "src": "/img/favicon.png", "sizes": "256x256", "type": "image/png", "purpose": "any" }
   ]

@@ -4,7 +4,9 @@ const { db } = require('../db');
 const sla = require('../sla');
 const followup = require('../followup');
 const odoo = require('../odoo');
+const googleAds = require('../googleAds');
 const nativeQuotes = require('../nativeQuotes');
+const velaraServices = require('../velaraServices');
 const { broadcast } = require('../realtime');
 const { requireRole } = require('../middleware/auth');
 
@@ -618,7 +620,7 @@ const DEFAULT_SOURCE = 'WhatsApp';
 const DEFAULT_CHANNEL_DETAIL = 'Google Ads';
 
 router.post('/', requireRole('coordinador', 'admin'), async (req, res) => {
-  const { client_name, phone, document, product, notes, advisor_id, source, city, created_at, client_id, address, email } = req.body || {};
+  const { client_name, phone, document, product, notes, advisor_id, source, city, created_at, client_id, address, email, gclid } = req.body || {};
   if (!client_name || !client_name.trim()) return res.status(400).json({ error: 'client_name es requerido' });
   if (!phone || !phone.trim()) return res.status(400).json({ error: 'phone es requerido' });
   const advisor = await db.prepare('SELECT * FROM advisors WHERE id = ? AND active = true').get(Number(advisor_id));
@@ -637,8 +639,8 @@ router.post('/', requireRole('coordinador', 'admin'), async (req, res) => {
   }
   const info = await db
     .prepare(
-      `INSERT INTO leads (client_name, phone, document, product, notes, status, assigned_advisor_id, source, channel_detail, city, created_at, client_id, address, email)
-       VALUES (?, ?, ?, ?, ?, 'asignado', ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO leads (client_name, phone, document, product, notes, status, assigned_advisor_id, source, channel_detail, city, created_at, client_id, address, email, gclid)
+       VALUES (?, ?, ?, ?, ?, 'asignado', ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       client_name.trim(),
@@ -657,7 +659,13 @@ router.post('/', requireRole('coordinador', 'admin'), async (req, res) => {
       now,
       client ? client.id : null,
       (address && address.trim()) || null,
-      (email && email.trim()) || null
+      (email && email.trim()) || null,
+      // gclid: el parámetro que Google pone en la URL cuando alguien llega
+      // desde un anuncio -- nada en el CRM lo captura todavía (llegaría de
+      // una futura landing page/webhook); si viene, queda guardado para
+      // poder reportar la venta cerrada como conversión a Google Ads (ver
+      // reportGoogleAdsConversion más abajo).
+      (gclid && gclid.trim()) || null
     );
 
   const created = await db.prepare('SELECT * FROM leads WHERE id = ?').get(info.lastInsertRowid);
@@ -983,16 +991,23 @@ router.post('/:id/quotations', async (req, res) => {
   if (!lead) return res.status(404).json({ error: 'Lead no encontrado' });
   if (!canOperateOn(req.user, lead)) return res.status(403).json({ error: 'No tienes permiso sobre este lead' });
 
-  const { lines, validity_days, note } = req.body || {};
+  const { lines, validity_days, note, service_slug, service_fields } = req.body || {};
   const cleanLines = Array.isArray(lines) ? lines.filter((l) => l && l.product_name && Number(l.qty) > 0) : [];
   if (!cleanLines.length) return res.status(400).json({ error: 'Agrega al menos un producto a la cotización' });
+
+  let cleanServiceFields = null;
+  if (service_slug) {
+    const check = velaraServices.validateServiceFields(service_slug, service_fields);
+    if (!check.ok) return res.status(400).json({ error: check.error });
+    cleanServiceFields = Object.keys(check.fields).length ? JSON.stringify(check.fields) : null;
+  }
 
   const days = Number(validity_days) > 0 ? Number(validity_days) : 8;
   const validityDate = new Date(Date.now() + days * 86400000).toISOString().slice(0, 10);
 
   const info = await db
-    .prepare('INSERT INTO quotations (lead_id, validity_days, validity_date, note, created_by) VALUES (?, ?, ?, ?, ?)')
-    .run(id, days, validityDate, (note && note.trim()) || null, req.user.id || null);
+    .prepare('INSERT INTO quotations (lead_id, validity_days, validity_date, note, created_by, service_slug, service_fields) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .run(id, days, validityDate, (note && note.trim()) || null, req.user.id || null, service_slug || null, cleanServiceFields);
   const quotationId = info.lastInsertRowid;
   await db.prepare("UPDATE quotations SET number = printf('COT-%04d', id) WHERE id = ?").run(quotationId);
   await nativeQuotes.writeLines(quotationId, cleanLines);
@@ -1146,6 +1161,29 @@ router.post('/:id/close', async (req, res) => {
     }
   }
 
+  // Reportar la venta ganada como conversión offline a Google Ads --
+  // best-effort, igual que Odoo arriba: el cierre en el CRM ya quedó
+  // guardado; si falla (o el lead no tiene gclid), no se revierte nada,
+  // solo se avisa. Solo se intenta una vez por lead (google_ads_conversion_sent_at).
+  let googleAdsWarning = null;
+  if (result === 'ganado' && closedLead.gclid && !closedLead.google_ads_conversion_sent_at && googleAds.canReportConversions()) {
+    try {
+      await googleAds.uploadClickConversion({
+        gclid: closedLead.gclid,
+        // Google Ads exige el offset UTC explícito, no un nombre de zona
+        // ("America/Bogota"); Colombia es UTC-05:00 todo el año (sin horario
+        // de verano), y `now` ya viene en UTC (mismo formato que el resto
+        // del CRM guarda), por eso no hace falta convertir la hora.
+        conversionDateTime: `${now}+00:00`,
+        conversionValue: closedLead.amount || 0,
+      });
+      await db.prepare('UPDATE leads SET google_ads_conversion_sent_at = ? WHERE id = ?').run(nowUtc(), id);
+    } catch (err) {
+      console.error(`[google-ads] lead ${id}: no se pudo reportar la conversión:`, err.message);
+      googleAdsWarning = `La venta se cerró, pero no se pudo reportar la conversión a Google Ads: ${err.message}`;
+    }
+  }
+
   broadcast('leads_changed', { reason: 'closed', id });
   if (result === 'ganado') {
     broadcast('sale_closed', {
@@ -1157,6 +1195,7 @@ router.post('/:id/close', async (req, res) => {
   }
   const payload = await serialize(closedLead);
   if (odooWarning) payload.odoo_warning = odooWarning;
+  if (googleAdsWarning) payload.google_ads_warning = googleAdsWarning;
   res.json(payload);
 });
 

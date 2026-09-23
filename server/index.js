@@ -13,6 +13,7 @@ const realtime = require('./realtime');
 const { scheduleWeeklyBackup } = require('./backup');
 const { loadUser, requireRole, AUTH_DISABLED } = require('./middleware/auth');
 const odooSync = require('./odoo-sync');
+const googleAdsSync = require('./googleAdsSync');
 
 const PORT = process.env.PORT || 4000;
 
@@ -78,6 +79,7 @@ async function main() {
   app.use('/api/quotations', require('./routes/quotations'));
   app.use('/api/kpis', requireRole('admin', 'coordinador'), require('./routes/kpis'));
   app.use('/api/marketing', requireRole('admin', 'coordinador'), require('./routes/marketing'));
+  app.use('/api/google-ads', requireRole('admin', 'coordinador'), require('./routes/googleAds'));
   app.use('/api/reports', requireRole('admin', 'coordinador'), require('./routes/reports'));
   app.use('/api/settings', requireRole('admin'), require('./routes/settings'));
   app.use('/api/export', requireRole('admin'), require('./routes/exports'));
@@ -98,6 +100,7 @@ async function main() {
   realtime.attach(server);
   scheduleWeeklyBackup();
   odooSync.start(); // copia el estado del embudo de Odoo -> CRM cada ~30s
+  googleAdsSync.start(); // trae el gasto/campañas de Google Ads -> ad_spend cada ~6h
 
   server.listen(PORT, '0.0.0.0', () => {
     console.log('');

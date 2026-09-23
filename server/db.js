@@ -179,6 +179,24 @@ CREATE TABLE IF NOT EXISTS ad_spend (
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Costo/clics/conversiones por campaña y día, traídos de la API de Google
+-- Ads (ver server/googleAds.js + server/googleAdsSync.js). Es el detalle
+-- fino que alimenta tanto el desglose "por campaña" de Rentabilidad de
+-- Leads como los totales mensuales de ad_spend (la sync los suma y
+-- actualiza ad_spend solo, sin necesidad de teclearlos a mano).
+CREATE TABLE IF NOT EXISTS google_ads_campaign_stats (
+  date TEXT NOT NULL,
+  campaign_id TEXT NOT NULL,
+  campaign_name TEXT NOT NULL,
+  cost REAL NOT NULL DEFAULT 0,
+  clicks INTEGER NOT NULL DEFAULT 0,
+  impressions INTEGER NOT NULL DEFAULT 0,
+  conversions REAL NOT NULL DEFAULT 0,
+  conversions_value REAL NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (date, campaign_id)
+);
+
 CREATE TABLE IF NOT EXISTS reports (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   type TEXT NOT NULL CHECK (type IN ('rendimiento', 'rentabilidad', 'asesor')),
@@ -227,7 +245,7 @@ CREATE TABLE IF NOT EXISTS quotations (
   -- (necesita el id, que solo se conoce tras insertar) -- UNIQUE en SQLite
   -- no choca entre varios NULL, asi que no hace falta un valor de relleno.
   number TEXT UNIQUE,
-  state TEXT NOT NULL DEFAULT 'draft' CHECK (state IN ('draft', 'sent', 'sale', 'cancel')),
+  state TEXT NOT NULL DEFAULT 'draft' CHECK (state IN ('draft', 'sent', 'seguimiento', 'aprobada', 'sale', 'cancel')),
   note TEXT,
   validity_days INTEGER NOT NULL DEFAULT 8,
   date_order TEXT NOT NULL DEFAULT (datetime('now')),
@@ -327,6 +345,51 @@ function ensureReportsTypeCheck() {
   exec('PRAGMA foreign_keys = ON');
 }
 
+// Igual que ensureReportsTypeCheck() de arriba, pero para quotations: se
+// agregan los estados intermedios 'seguimiento' y 'aprobada' (cotización en
+// seguimiento con el cliente / ya aprobada por el cliente, antes de
+// convertirse en venta) al rediseño de Cotizaciones sobre el concepto de
+// Velara.
+function ensureQuotationsStateCheck() {
+  const row = conn.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'quotations'").get();
+  if (!row || row.sql.includes("'seguimiento'")) return;
+
+  exec('PRAGMA foreign_keys = OFF');
+  exec('BEGIN');
+  try {
+    exec(`
+      CREATE TABLE quotations_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        lead_id INTEGER NOT NULL REFERENCES leads(id),
+        number TEXT UNIQUE,
+        state TEXT NOT NULL DEFAULT 'draft' CHECK (state IN ('draft', 'sent', 'seguimiento', 'aprobada', 'sale', 'cancel')),
+        note TEXT,
+        validity_days INTEGER NOT NULL DEFAULT 8,
+        date_order TEXT NOT NULL DEFAULT (datetime('now')),
+        validity_date TEXT,
+        amount_untaxed REAL NOT NULL DEFAULT 0,
+        amount_tax REAL NOT NULL DEFAULT 0,
+        amount_total REAL NOT NULL DEFAULT 0,
+        created_by INTEGER REFERENCES users(id),
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+    `);
+    exec(
+      'INSERT INTO quotations_new (id, lead_id, number, state, note, validity_days, date_order, validity_date, amount_untaxed, amount_tax, amount_total, created_by, created_at, updated_at) ' +
+        'SELECT id, lead_id, number, state, note, validity_days, date_order, validity_date, amount_untaxed, amount_tax, amount_total, created_by, created_at, updated_at FROM quotations'
+    );
+    exec('DROP TABLE quotations');
+    exec('ALTER TABLE quotations_new RENAME TO quotations');
+    exec('COMMIT');
+  } catch (err) {
+    exec('ROLLBACK');
+    exec('PRAGMA foreign_keys = ON');
+    throw err;
+  }
+  exec('PRAGMA foreign_keys = ON');
+}
+
 // Pone un valor por defecto SOLO si esa llave todavia no existe -- a
 // diferencia de seedIfEmpty() (que solo corre en una base recien creada,
 // vacia de advisors), esto corre siempre y no pisa un valor que el usuario
@@ -337,27 +400,25 @@ async function ensureDefaultSetting(key, value) {
 }
 
 // Datos de la empresa para el PDF de cotización nativo (pestaña "Cotizar",
-// ver server/routes/quotations.js) -- mismos datos que ya traía la plantilla
-// de Odoo que se usaba antes (ver un Cotización_S0....pdf viejo del
-// proyecto), para que el documento nuevo salga pareciendo el de siempre.
-// Editables despues desde Ajustes -> "Datos de la empresa (cotizaciones)".
+// ver server/routes/quotations.js). Datos reales de Velara Taller S.A.S.
+// (ver Velara/notas/proyecto-velara.md) donde ya se conocen; NIT y cuenta de
+// pago se dejan en blanco a propósito -- no hay uno real confirmado todavía,
+// y no tiene sentido inventar un número bancario en un documento real.
+// Editables desde Ajustes -> "Datos de la empresa (cotizaciones)".
 async function seedQuoteDefaults() {
-  await ensureDefaultSetting('quote_company_name', 'MANUFACTURAS Y DISEÑOS NOVA S.A.S.');
-  await ensureDefaultSetting('quote_company_nit', '900656236-1');
-  await ensureDefaultSetting('quote_company_address', 'Barranquilla, Colombia');
-  await ensureDefaultSetting('quote_company_phone', '3206439915');
-  await ensureDefaultSetting('quote_company_email', 'Comercial1@manufacturasnova.com');
-  await ensureDefaultSetting(
-    'quote_payment_details',
-    'Transferencia Bancolombia | Cuenta Corriente: 47700003069\nTransferencia Occidente | Cuenta Corriente: 810-859348\nBeneficiario: Manufacturas y Diseños Nova S.A.S. | NIT: 900656236-1'
-  );
+  await ensureDefaultSetting('quote_company_name', 'Velara Taller S.A.S.');
+  await ensureDefaultSetting('quote_company_nit', '');
+  await ensureDefaultSetting('quote_company_address', 'Calle 56 # 12C-02, Local 3, Barranquilla, Atlántico');
+  await ensureDefaultSetting('quote_company_phone', '3225640747');
+  await ensureDefaultSetting('quote_company_email', 'velarataller@gmail.com');
+  await ensureDefaultSetting('quote_payment_details', '');
   await ensureDefaultSetting(
     'quote_terms',
-    'Para iniciar la producción se requiere un anticipo del 50%. El saldo restante deberá cancelarse en su totalidad antes del despacho del pedido.\n' +
-      'El tiempo de entrega es de 8 días hábiles, contados a partir de la confirmación del anticipo y de la definición completa del diseño del producto. Este plazo puede variar según la cantidad, el tipo de producto o lo acordado con el asesor.\n' +
-      'Las garantías se atenderán dentro de los 15 días hábiles por fallas atribuibles a Manufacturas NOVA; el transporte corre por cuenta del cliente.\n' +
-      'Una vez aprobadas las artes y especificaciones del pedido, cualquier modificación posterior será responsabilidad del cliente, podrá generar costos adicionales y afectar el tiempo de entrega.\n' +
-      'La empresa no se hace responsable por retrasos ocasionados por causas externas, tales como transporte, fuerza mayor, demoras atribuibles a proveedores o la falta de información oportuna por parte del cliente.'
+    'Tiempo estimado de entrega: 1 a 3 días hábiles (puede variar según la carga del taller y la complejidad del trabajo).\n' +
+      'Garantía de 6 meses por defectos de costura y cierres.\n' +
+      'El valor puede variar según el estado real del vehículo/mueble y las personalizaciones solicitadas al momento de recibirlo.\n' +
+      'Para iniciar el trabajo se confirma disponibilidad y se coordina el ingreso del vehículo o los muebles al taller.\n' +
+      'Esta cotización no representa una reserva de cupo.'
   );
 }
 
@@ -411,7 +472,27 @@ async function init() {
   // por defecto a la línea al elegirlo (el asesor la puede editar o borrar
   // ahí, sin afectar la ficha del producto).
   ensureColumn('products', 'description', 'TEXT');
+  // Integración con Google Ads (ver server/googleAds.js): de dónde vino
+  // cada mes de ad_spend ('manual' = lo tecleó alguien en Ajustes,
+  // 'google_ads_api' = lo llenó la sincronización sola) -- la sync nunca
+  // pisa un mes marcado 'manual', para no perder una corrección a mano.
+  // gclid/google_ads_conversion_sent_at: para reportar la venta cerrada
+  // como conversión offline a Google Ads (solo aplica a un lead que haya
+  // llegado con ese parámetro; hoy nada en el CRM lo captura todavía --
+  // queda listo para cuando exista esa fuente, ej. una landing page).
+  ensureColumn('ad_spend', 'source', "TEXT NOT NULL DEFAULT 'manual'");
+  ensureColumn('leads', 'gclid', 'TEXT');
+  ensureColumn('leads', 'google_ads_conversion_sent_at', 'TEXT');
+  // Rediseño de Cotizaciones sobre el concepto de Velara: cada cotización
+  // queda ligada a un servicio (server/velaraServices.js) y guarda sus
+  // campos propios (marca/modelo/año del vehículo, material, color, etc.)
+  // como JSON -- son distintos por servicio, no tiene sentido una columna
+  // por campo. Ver también ensureQuotationsStateCheck() arriba (estados
+  // 'seguimiento'/'aprobada' nuevos).
+  ensureColumn('quotations', 'service_slug', 'TEXT');
+  ensureColumn('quotations', 'service_fields', 'TEXT');
   ensureReportsTypeCheck();
+  ensureQuotationsStateCheck();
   await seedIfEmpty();
   await seedQuoteDefaults();
 }
