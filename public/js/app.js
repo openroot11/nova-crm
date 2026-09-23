@@ -2,32 +2,16 @@ import { api } from './api.js';
 import { ws } from './ws.js';
 import { escapeHtml } from './utils.js';
 import { getCurrentUser, logout } from './auth.js';
+import { APPS, ROUTES_BY_ROLE, appOfRoute, routeLabel, visibleApps } from './apps.js';
 
 const user = getCurrentUser();
 
-// Rutas visibles por rol. Un asesor solo necesita operar su propio dia a
-// dia (Ventas/SLA); coordinador suma reportes y equipo; admin ve todo,
-// incluyendo Ajustes (que ademas el backend ya protege con requireRole).
-const ROUTES_BY_ROLE = {
-  admin: ['dashboard1', 'dashboard', 'ventas', 'seguimiento', 'cotizaciones', 'cotizar', 'clientes', 'informe', 'ventas-cerradas', 'estadisticas', 'reporte', 'asesores', 'ajustes'],
-  coordinador: ['dashboard1', 'dashboard', 'ventas', 'seguimiento', 'cotizaciones', 'cotizar', 'clientes', 'informe', 'ventas-cerradas', 'estadisticas', 'asesores'],
-  // Seguimiento (cotizaciones sin respuesta del cliente) es seguimiento de
-  // EQUIPO, no del dia a dia de un asesor sobre lo suyo -- se le quito del
-  // menu para no duplicar la misma alerta que ya ve en Ventas.
-  asesor: ['ventas', 'cotizaciones', 'cotizar', 'clientes'],
-};
+// Rutas visibles por rol (ver apps.js). Todos aterrizan en Inicio, la
+// pantalla de aplicaciones (como el inicio de Odoo).
 const allowedRoutes = ROUTES_BY_ROLE[user?.role] || ROUTES_BY_ROLE.asesor;
-// El Dashboard resume datos de todo el equipo (los mismos endpoints de
-// Estadisticas, solo accesibles para admin/coordinador), asi que solo esos
-// roles aterrizan ahi; un asesor sigue entrando directo a Ventas, su
-// pantalla operativa de siempre.
-const DEFAULT_ROUTE = allowedRoutes.includes('dashboard') ? 'dashboard' : 'ventas';
+const DEFAULT_ROUTE = 'inicio';
 
-document.querySelectorAll('.nav-link').forEach((el) => {
-  if (!allowedRoutes.includes(el.dataset.route)) el.closest('li').classList.add('hidden');
-});
-
-const ROLE_LABELS = { admin: 'Dueño / Admin', coordinador: 'Coordinador', asesor: 'Asesor' };
+const ROLE_LABELS = { admin: 'Dueño / Admin', coordinador: 'Coordinador', asesor: 'Asesor', produccion: 'Producción' };
 const sidebarFoot = document.querySelector('#sidebar > div:last-child');
 if (sidebarFoot && user) {
   sidebarFoot.innerHTML = `
@@ -86,39 +70,36 @@ themeToggleBtn.addEventListener('click', () => {
 });
 
 const routes = {
+  inicio: () => import('./views/inicio.js'),
   dashboard1: () => import('./views/dashboard1.js'),
   dashboard: () => import('./views/dashboard.js'),
   ventas: () => import('./views/ventas.js'),
   seguimiento: () => import('./views/seguimiento.js'),
   cotizaciones: () => import('./views/cotizaciones.js'),
   cotizar: () => import('./views/cotizar.js'),
+  produccion: () => import('./views/produccion.js'),
+  pedidos: () => import('./views/pedidos.js'),
+  programacion: () => import('./views/programacion.js'),
+  op: () => import('./views/op.js'),
+  'solicitudes-material': () => import('./views/solicitudesMaterial.js'),
+  'reportes-produccion': () => import('./views/reportesProduccion.js'),
+  inventario: () => import('./views/inventario.js'),
+  garantias: () => import('./views/garantias.js'),
+  compras: () => import('./views/compras.js'),
+  finanzas: () => import('./views/finanzas.js'),
   clientes: () => import('./views/clientes.js'),
   informe: () => import('./views/informe.js'),
   'ventas-cerradas': () => import('./views/ventasCerradas.js'),
   estadisticas: () => import('./views/estadisticas.js'),
   reporte: () => import('./views/reporte.js'),
   asesores: () => import('./views/asesores.js'),
+  operarios: () => import('./views/operarios.js'),
   ajustes: () => import('./views/ajustes.js'),
-};
-
-const titles = {
-  dashboard1: 'Dashboard 1',
-  dashboard: 'Dashboard 2',
-  ventas: 'Registro Operativo',
-  seguimiento: 'Seguimiento Activo',
-  cotizaciones: 'Cotizaciones',
-  cotizar: 'Cotizar',
-  clientes: 'Clientes',
-  informe: 'Informe Diario',
-  'ventas-cerradas': 'Ventas Cerradas',
-  estadisticas: 'Rendimiento Comercial',
-  reporte: 'Reporte de Servicio al Cliente',
-  asesores: 'Gestión del Equipo',
-  ajustes: 'Configuración y Exportación',
 };
 
 const viewRoot = document.getElementById('view-root');
 const pageTitle = document.getElementById('page-title');
+const navList = document.getElementById('nav-list');
 const toastRoot = document.getElementById('toast-root');
 
 function toast(message, kind = 'info') {
@@ -139,12 +120,54 @@ const ctx = {
   ws,
   toast,
   user,
+  allowedRoutes,
   navigate: (route, params) => {
     const qs = params ? `?${new URLSearchParams(params).toString()}` : '';
     location.hash = `#/${route}${qs}`;
   },
   routeParams: new URLSearchParams(),
 };
+
+// Menú lateral: en Inicio lista las aplicaciones; dentro de una aplicación
+// muestra solo sus pantallas (como Odoo), con un botón para volver a Inicio.
+function renderSidebar(route, app) {
+  const linkCls = (active) =>
+    `nav-link flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors ${
+      active ? 'bg-surface-container-high text-on-surface font-bold border-r-4 border-outline' : 'text-on-surface-variant hover:bg-surface-container-low'
+    }`;
+  const homeLink = `
+    <li><a href="#/inicio" data-route="inicio" class="${linkCls(route === 'inicio')}">
+      <span class="material-symbols-outlined text-[20px]">apps</span><span class="text-label-bold font-label-bold">Inicio</span></a></li>`;
+
+  if (!app) {
+    navList.innerHTML =
+      homeLink +
+      `<li class="px-3 pt-4 pb-1 text-[10px] font-label-bold uppercase tracking-wider text-on-surface-variant">Aplicaciones</li>` +
+      visibleApps(allowedRoutes)
+        .map(
+          (a) => `
+        <li><a href="#/${a.firstRoute}" class="${linkCls(false)}">
+          <span class="material-symbols-outlined text-[20px]" style="color:${a.color}">${a.icon}</span><span class="text-label-bold font-label-bold">${escapeHtml(a.label)}</span></a></li>`
+        )
+        .join('');
+    return;
+  }
+
+  const items = app.routes.filter(([r]) => allowedRoutes.includes(r));
+  navList.innerHTML = `
+    ${homeLink}
+    <li class="px-3 pt-4 pb-2 flex items-center gap-2">
+      <span class="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style="background:${app.color}1f;color:${app.color}"><span class="material-symbols-outlined text-[20px]">${app.icon}</span></span>
+      <span class="text-body-md font-bold text-on-surface truncate">${escapeHtml(app.label)}</span>
+    </li>
+    ${items
+      .map(
+        ([r, label]) => `
+      <li><a href="#/${r}" data-route="${r}" class="${linkCls(r === route)} text-body-sm">${escapeHtml(label)}</a></li>`
+      )
+      .join('')}
+  `;
+}
 
 let currentUnmount = null;
 
@@ -154,29 +177,14 @@ async function render() {
   const route = routes[hashRoute] && allowedRoutes.includes(hashRoute) ? hashRoute : DEFAULT_ROUTE;
   ctx.routeParams = new URLSearchParams(route === hashRoute ? hashQuery : '');
 
-  document.querySelectorAll('.nav-link').forEach((el) => {
-    const active = el.dataset.route === route;
-    el.classList.toggle('bg-surface-container-high', active);
-    el.classList.toggle('text-on-surface', active);
-    el.classList.toggle('font-bold', active);
-    el.classList.toggle('text-on-surface-variant', !active);
-    el.classList.toggle('border-r-4', active);
-    el.classList.toggle('border-outline', active);
-  });
+  const app = appOfRoute(route);
+  renderSidebar(route, app);
 
-  // Grupos colapsables del sidebar (hoy solo "Ventas"): se abren solos y
-  // resaltan el encabezado cuando la ruta activa es una de sus hijas, sin
-  // forzar el cierre si el usuario los abrio manualmente en otra ruta.
-  document.querySelectorAll('details[data-group]').forEach((details) => {
-    const childActive = [...details.querySelectorAll('.nav-link')].some((el) => el.dataset.route === route);
-    if (childActive) details.open = true;
-    const summary = details.querySelector('summary');
-    summary.classList.toggle('text-on-surface', childActive);
-    summary.classList.toggle('font-bold', childActive);
-  });
-
-  pageTitle.textContent = titles[route];
-  document.title = `${titles[route]} · Velara CRM`;
+  const title = routeLabel(route);
+  pageTitle.innerHTML = app
+    ? `<a href="#/${app.firstRoute}" class="font-normal text-on-surface-variant hover:text-on-surface">${escapeHtml(app.label)} ›</a> ${escapeHtml(title)}`
+    : escapeHtml(title);
+  document.title = `${title} · Velara CRM`;
 
   if (typeof currentUnmount === 'function') {
     try {

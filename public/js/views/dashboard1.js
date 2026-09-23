@@ -58,7 +58,7 @@ export async function mount(container, ctx) {
   container.innerHTML = `
     <div class="flex flex-wrap justify-between items-end gap-4 mb-margin-desktop">
       <div>
-        <h2 class="text-headline-lg font-headline-lg text-on-surface">Dashboard 1</h2>
+        <h2 class="text-headline-lg font-headline-lg text-on-surface">Panel de gerencia</h2>
         <p class="text-body-md font-body-md text-on-surface-variant mt-1">Resumen de gerencia — <span id="d1-periodo">—</span></p>
       </div>
       <div class="flex items-end gap-3 flex-wrap">

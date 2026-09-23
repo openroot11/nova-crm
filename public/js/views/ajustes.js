@@ -6,6 +6,7 @@ const ROLES = [
   { value: 'admin', label: 'Dueño / Admin' },
   { value: 'coordinador', label: 'Coordinador' },
   { value: 'asesor', label: 'Asesor' },
+  { value: 'produccion', label: 'Producción (jefe de taller)' },
 ];
 const ROLE_LABELS = Object.fromEntries(ROLES.map((r) => [r.value, r.label]));
 

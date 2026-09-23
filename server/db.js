@@ -57,6 +57,444 @@ function transaction(fn) {
 
 const db = { prepare, exec, transaction };
 
+// ---------------------------------------------------------------------------
+// Producción (ver Velara_CRM_Produccion_Especificacion_Aprobada.md y
+// docs/PLAN-PRODUCCION.md). Pedido comercial -> 1..N Órdenes de Producción.
+// Producción NO toca inventario: solo registra lo que necesita y genera
+// Solicitudes de Material para el futuro módulo de Inventario. Ningún
+// registro se borra físicamente (se cancela/anula), y todo cambio importante
+// queda en activity_log (lo escribe el servidor, ver server/production.js).
+// ---------------------------------------------------------------------------
+const PRODUCTION_SCHEMA_SQL = `
+-- Pedido comercial (PED-2026-00001). Cliente/contacto/asesor salen del lead;
+-- aquí solo lo propio del pedido. status: recibido -> por_validar ->
+-- (info_solicitada) -> validado; o cancelado.
+CREATE TABLE IF NOT EXISTS sales_orders (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  number TEXT UNIQUE,
+  quotation_id INTEGER REFERENCES quotations(id),
+  lead_id INTEGER REFERENCES leads(id),
+  client_name TEXT NOT NULL,
+  contact TEXT,
+  phone TEXT,
+  address TEXT,
+  destination TEXT,
+  advisor_id INTEGER REFERENCES advisors(id),
+  product_summary TEXT,
+  requested_date TEXT,
+  received_at TEXT NOT NULL DEFAULT (datetime('now')),
+  status TEXT NOT NULL DEFAULT 'por_validar' CHECK (status IN ('recibido', 'por_validar', 'info_solicitada', 'validado', 'cancelado')),
+  info_request TEXT,
+  notes TEXT,
+  cancel_reason TEXT,
+  created_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_sales_orders_lead ON sales_orders(lead_id);
+
+-- Orden de Producción (OP-2026-0001, consecutivo por año, único).
+CREATE TABLE IF NOT EXISTS production_orders (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  number TEXT UNIQUE,
+  year INTEGER NOT NULL,
+  seq INTEGER NOT NULL,
+  sales_order_id INTEGER NOT NULL REFERENCES sales_orders(id),
+  product_name TEXT NOT NULL,
+  product_code TEXT,
+  service_slug TEXT,
+  quantity REAL NOT NULL DEFAULT 1,
+  unit TEXT NOT NULL DEFAULT 'und',
+  received_at TEXT,
+  requested_date TEXT,
+  committed_date TEXT,
+  start_date TEXT,
+  priority TEXT NOT NULL DEFAULT 'normal' CHECK (priority IN ('baja', 'normal', 'alta', 'urgente')),
+  responsible_worker_id INTEGER REFERENCES workers(id),
+  advisor_id INTEGER REFERENCES advisors(id),
+  status TEXT NOT NULL DEFAULT 'por_validar' CHECK (status IN ('por_validar', 'programada', 'en_produccion', 'pausada', 'control', 'lista', 'entregada', 'cerrada', 'cancelada')),
+  paused_from TEXT,
+  requires_approval INTEGER NOT NULL DEFAULT 1,
+  observations TEXT,
+  cancel_reason TEXT,
+  started_at TEXT,
+  finished_at TEXT,
+  delivered_at TEXT,
+  closed_at TEXT,
+  warranty_months INTEGER NOT NULL DEFAULT 6,
+  created_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (year, seq)
+);
+CREATE INDEX IF NOT EXISTS idx_production_orders_status ON production_orders(status);
+CREATE INDEX IF NOT EXISTS idx_production_orders_so ON production_orders(sales_order_id);
+
+-- Producto y especificaciones técnicas como filas clave/valor (section =
+-- producto | tecnica): crecen sin rediseñar la OP.
+CREATE TABLE IF NOT EXISTS production_specs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  op_id INTEGER NOT NULL REFERENCES production_orders(id),
+  section TEXT NOT NULL CHECK (section IN ('producto', 'tecnica')),
+  label TEXT NOT NULL,
+  value TEXT,
+  position INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_production_specs_op ON production_specs(op_id);
+
+-- Diseños y archivos con versiones: una versión nueva de un mismo grupo
+-- ("Diseño principal") deja la anterior como no vigente; nunca se borra.
+CREATE TABLE IF NOT EXISTS production_files (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  op_id INTEGER NOT NULL REFERENCES production_orders(id),
+  kind TEXT NOT NULL DEFAULT 'diseno' CHECK (kind IN ('diseno', 'plano', 'ficha', 'foto', 'pdf', 'otro')),
+  group_name TEXT NOT NULL,
+  version INTEGER NOT NULL DEFAULT 1,
+  is_current INTEGER NOT NULL DEFAULT 1,
+  original_name TEXT NOT NULL,
+  stored_path TEXT NOT NULL,
+  mime TEXT,
+  size INTEGER,
+  note TEXT,
+  uploaded_by INTEGER REFERENCES users(id),
+  uploaded_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_production_files_op ON production_files(op_id);
+
+-- Materiales requeridos por la OP (NO es inventario).
+CREATE TABLE IF NOT EXISTS material_requirements (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  op_id INTEGER NOT NULL REFERENCES production_orders(id),
+  material TEXT NOT NULL,
+  code TEXT,
+  qty REAL NOT NULL,
+  unit TEXT NOT NULL DEFAULT 'und',
+  notes TEXT,
+  status TEXT NOT NULL DEFAULT 'pendiente' CHECK (status IN ('pendiente', 'solicitado', 'disponible', 'bloqueado', 'anulado')),
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_material_requirements_op ON material_requirements(op_id);
+
+-- Solicitud de material (SM-0001): la bandeja que atenderá el futuro módulo
+-- de Inventario. No modifica ninguna existencia.
+CREATE TABLE IF NOT EXISTS material_requests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  number TEXT UNIQUE,
+  op_id INTEGER NOT NULL REFERENCES production_orders(id),
+  requirement_id INTEGER REFERENCES material_requirements(id),
+  material TEXT NOT NULL,
+  qty REAL NOT NULL,
+  unit TEXT NOT NULL DEFAULT 'und',
+  reason TEXT NOT NULL DEFAULT 'Producción',
+  status TEXT NOT NULL DEFAULT 'pendiente' CHECK (status IN ('pendiente', 'atendida', 'cancelada')),
+  requested_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Tareas de la OP (el % de progreso sale de aquí).
+CREATE TABLE IF NOT EXISTS production_tasks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  op_id INTEGER NOT NULL REFERENCES production_orders(id),
+  name TEXT NOT NULL,
+  worker_id INTEGER REFERENCES workers(id),
+  planned_date TEXT,
+  started_at TEXT,
+  finished_at TEXT,
+  status TEXT NOT NULL DEFAULT 'pendiente' CHECK (status IN ('pendiente', 'en_proceso', 'completada', 'bloqueada', 'anulada')),
+  notes TEXT,
+  position INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_production_tasks_op ON production_tasks(op_id);
+
+-- Operarios asignados a la OP (además del responsable principal).
+CREATE TABLE IF NOT EXISTS production_workers (
+  op_id INTEGER NOT NULL REFERENCES production_orders(id),
+  worker_id INTEGER NOT NULL REFERENCES workers(id),
+  PRIMARY KEY (op_id, worker_id)
+);
+
+-- Bloqueos: mientras haya uno activo la OP queda PAUSADA.
+CREATE TABLE IF NOT EXISTS production_blocks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  op_id INTEGER NOT NULL REFERENCES production_orders(id),
+  reason TEXT NOT NULL CHECK (reason IN ('info_incompleta', 'diseno_pendiente', 'aprobacion_pendiente', 'material_pendiente', 'problema_produccion', 'otro')),
+  responsible TEXT,
+  notes TEXT,
+  status TEXT NOT NULL DEFAULT 'activo' CHECK (status IN ('activo', 'resuelto')),
+  created_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  resolved_by INTEGER REFERENCES users(id),
+  resolved_at TEXT,
+  resolution TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_production_blocks_op ON production_blocks(op_id);
+
+-- Control / revisión al terminar la producción.
+CREATE TABLE IF NOT EXISTS production_reviews (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  op_id INTEGER NOT NULL REFERENCES production_orders(id),
+  result TEXT NOT NULL CHECK (result IN ('aprobado', 'correccion')),
+  checklist TEXT,
+  notes TEXT,
+  reviewed_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Aprobación del asesor comercial (confirmaciones + firma dibujada).
+CREATE TABLE IF NOT EXISTS production_approvals (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  op_id INTEGER NOT NULL REFERENCES production_orders(id),
+  advisor_id INTEGER REFERENCES advisors(id),
+  signed_name TEXT NOT NULL,
+  confirm_features INTEGER NOT NULL DEFAULT 0,
+  confirm_quantities INTEGER NOT NULL DEFAULT 0,
+  confirm_design INTEGER NOT NULL DEFAULT 0,
+  signature_path TEXT,
+  notes TEXT,
+  created_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Registros de entrega: kind = lista (terminada y autorizada) | entregada.
+CREATE TABLE IF NOT EXISTS production_deliveries (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  op_id INTEGER NOT NULL REFERENCES production_orders(id),
+  kind TEXT NOT NULL CHECK (kind IN ('lista', 'entregada')),
+  date TEXT NOT NULL,
+  responsible TEXT,
+  review_done INTEGER NOT NULL DEFAULT 0,
+  authorized_by TEXT,
+  received_by TEXT,
+  notes TEXT,
+  created_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Historial / auditoría de pedidos y OP.
+CREATE TABLE IF NOT EXISTS activity_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  entity TEXT NOT NULL CHECK (entity IN ('op', 'pedido')),
+  entity_id INTEGER NOT NULL,
+  user_id INTEGER REFERENCES users(id),
+  action TEXT NOT NULL,
+  detail TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_activity_log_entity ON activity_log(entity, entity_id);
+`;
+
+// users.role tiene un CHECK con los roles permitidos; para sumar el rol
+// "produccion" (jefe de producción) hay que reconstruir la tabla, mismo
+// procedimiento que ensureQuotationsStateCheck(). Copia todas las columnas
+// que tenga la tabla hoy, sin suponer cuáles son.
+// warranty_claims.work_order_id nació NOT NULL (reclamos de la orden de
+// trabajo vieja); ahora los reclamos cuelgan de la OP (production_order_id)
+// y ese campo debe poder ir vacío. Se reconstruye la tabla una sola vez.
+function ensureWarrantyClaimsNullable() {
+  const row = conn.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'warranty_claims'").get();
+  const oldDef = 'work_order_id INTEGER NOT NULL REFERENCES work_orders(id)';
+  if (!row || !row.sql.includes(oldDef)) return;
+  const newSql = row.sql
+    .replace(oldDef, 'work_order_id INTEGER REFERENCES work_orders(id)')
+    .replace(/^CREATE TABLE\s+"?warranty_claims"?/i, 'CREATE TABLE warranty_claims_new');
+  const cols = conn.prepare('PRAGMA table_info(warranty_claims)').all().map((c) => c.name).join(', ');
+  exec('PRAGMA foreign_keys = OFF');
+  exec('BEGIN');
+  try {
+    exec(newSql);
+    exec(`INSERT INTO warranty_claims_new (${cols}) SELECT ${cols} FROM warranty_claims`);
+    exec('DROP TABLE warranty_claims');
+    exec('ALTER TABLE warranty_claims_new RENAME TO warranty_claims');
+    exec('CREATE INDEX IF NOT EXISTS idx_warranty_claims_order ON warranty_claims(work_order_id)');
+    exec('COMMIT');
+  } catch (err) {
+    exec('ROLLBACK');
+    exec('PRAGMA foreign_keys = ON');
+    throw err;
+  }
+  exec('PRAGMA foreign_keys = ON');
+}
+
+function ensureUsersRoleCheck() {
+  const row = conn.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'users'").get();
+  if (!row || row.sql.includes("'produccion'")) return;
+  const oldCheck = "CHECK (role IN ('admin', 'coordinador', 'asesor'))";
+  if (!row.sql.includes(oldCheck)) throw new Error('No se reconoce la restricción de roles de users; revisar ensureUsersRoleCheck');
+  const newSql = row.sql
+    .replace(oldCheck, "CHECK (role IN ('admin', 'coordinador', 'asesor', 'produccion'))")
+    .replace(/^CREATE TABLE\s+"?users"?/i, 'CREATE TABLE users_new');
+  const cols = conn.prepare('PRAGMA table_info(users)').all().map((c) => c.name).join(', ');
+  exec('PRAGMA foreign_keys = OFF');
+  exec('BEGIN');
+  try {
+    exec(newSql);
+    exec(`INSERT INTO users_new (${cols}) SELECT ${cols} FROM users`);
+    exec('DROP TABLE users');
+    exec('ALTER TABLE users_new RENAME TO users');
+    exec('COMMIT');
+  } catch (err) {
+    exec('ROLLBACK');
+    exec('PRAGMA foreign_keys = ON');
+    throw err;
+  }
+  exec('PRAGMA foreign_keys = ON');
+}
+
+// ---------------------------------------------------------------------------
+// ERP (rama erp-taller): inventario de materiales, compras, caja y
+// garantías. work_orders/stock_movements son de la primera versión del
+// taller (antes de Producción): Inventario y Compras siguen como apps
+// aparte; la orden de trabajo quedó reemplazada por la OP de Producción.
+// ---------------------------------------------------------------------------
+const ERP_SCHEMA_SQL = `
+-- Operarios del taller (quienes cortan, cosen e instalan). No son usuarios
+-- del sistema ni asesores de venta: el taller los asigna a órdenes.
+CREATE TABLE IF NOT EXISTS workers (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  specialty TEXT,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Orden de trabajo (OT-0001...). stage: por_iniciar -> en_proceso -> listo
+-- (para entregar) -> entregado; 'cancelada' la saca del tablero.
+-- promised_date es solo fecha (AAAA-MM-DD), la que se le prometió al cliente.
+CREATE TABLE IF NOT EXISTS work_orders (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  number TEXT UNIQUE,
+  quotation_id INTEGER REFERENCES quotations(id),
+  lead_id INTEGER REFERENCES leads(id),
+  client_name TEXT NOT NULL,
+  phone TEXT,
+  service_slug TEXT,
+  service_fields TEXT,
+  description TEXT,
+  amount_total REAL NOT NULL DEFAULT 0,
+  stage TEXT NOT NULL DEFAULT 'por_iniciar' CHECK (stage IN ('por_iniciar', 'en_proceso', 'listo', 'entregado', 'cancelada')),
+  worker_id INTEGER REFERENCES workers(id),
+  promised_date TEXT,
+  notes TEXT,
+  started_at TEXT,
+  ready_at TEXT,
+  delivered_at TEXT,
+  created_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_work_orders_stage ON work_orders(stage);
+CREATE INDEX IF NOT EXISTS idx_work_orders_quotation ON work_orders(quotation_id);
+
+-- Materiales del taller (cuero sintético, espuma, hilo...). stock y
+-- min_stock en la unidad del material; cost = costo por unidad de la última
+-- entrada (compra), para valorizar el inventario y el consumo de cada orden.
+CREATE TABLE IF NOT EXISTS materials (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  unit TEXT NOT NULL DEFAULT 'm',
+  stock REAL NOT NULL DEFAULT 0,
+  min_stock REAL NOT NULL DEFAULT 0,
+  cost REAL NOT NULL DEFAULT 0,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Todo cambio de existencias queda registrado aquí (el stock de materials es
+-- el saldo que resulta de estos movimientos). qty con signo: + entra, - sale.
+-- entrada = compra/recepción, consumo = gastado en una orden, devolucion =
+-- sobró de una orden y vuelve, ajuste = conteo físico.
+CREATE TABLE IF NOT EXISTS stock_movements (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  material_id INTEGER NOT NULL REFERENCES materials(id),
+  type TEXT NOT NULL CHECK (type IN ('entrada', 'consumo', 'devolucion', 'ajuste')),
+  qty REAL NOT NULL,
+  unit_cost REAL NOT NULL DEFAULT 0,
+  work_order_id INTEGER REFERENCES work_orders(id),
+  note TEXT,
+  created_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_stock_movements_material ON stock_movements(material_id);
+CREATE INDEX IF NOT EXISTS idx_stock_movements_order ON stock_movements(work_order_id);
+
+-- Proveedores de materiales.
+CREATE TABLE IF NOT EXISTS suppliers (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  nit TEXT,
+  contact TEXT,
+  phone TEXT,
+  email TEXT,
+  notes TEXT,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Orden de compra (OC-0001). status: borrador -> pedida -> recibida (al
+-- recibirla, cada línea entra al inventario con su costo) o cancelada.
+-- Lo pagado al proveedor no se guarda aquí: son egresos de Caja ligados a
+-- la orden (cash_entries.purchase_order_id).
+CREATE TABLE IF NOT EXISTS purchase_orders (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  number TEXT UNIQUE,
+  supplier_id INTEGER NOT NULL REFERENCES suppliers(id),
+  status TEXT NOT NULL DEFAULT 'borrador' CHECK (status IN ('borrador', 'pedida', 'recibida', 'cancelada')),
+  expected_date TEXT,
+  notes TEXT,
+  total REAL NOT NULL DEFAULT 0,
+  ordered_at TEXT,
+  received_at TEXT,
+  created_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS purchase_order_lines (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  purchase_order_id INTEGER NOT NULL REFERENCES purchase_orders(id),
+  material_id INTEGER NOT NULL REFERENCES materials(id),
+  qty REAL NOT NULL,
+  unit_cost REAL NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_po_lines_po ON purchase_order_lines(purchase_order_id);
+
+-- Caja: todo lo que entra o sale de plata que NO es un abono de cliente (los
+-- abonos ya viven en "payments", ligados a la venta, y Caja los suma como
+-- ingresos al mostrar el día). kind: egreso (gastos, pago a proveedor,
+-- nómina...) o ingreso (otros ingresos). purchase_order_id liga un pago a
+-- su orden de compra.
+CREATE TABLE IF NOT EXISTS cash_entries (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL CHECK (kind IN ('ingreso', 'egreso')),
+  category TEXT NOT NULL,
+  amount REAL NOT NULL CHECK (amount > 0),
+  method TEXT NOT NULL DEFAULT 'efectivo',
+  description TEXT,
+  entry_date TEXT NOT NULL,
+  purchase_order_id INTEGER REFERENCES purchase_orders(id),
+  created_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_cash_entries_date ON cash_entries(entry_date);
+
+-- Reclamos de garantía sobre una orden ya entregada. status: abierto ->
+-- en_revision -> resuelto | rechazado (fuera de garantía o no aplica).
+CREATE TABLE IF NOT EXISTS warranty_claims (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  work_order_id INTEGER REFERENCES work_orders(id),
+  description TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'abierto' CHECK (status IN ('abierto', 'en_revision', 'resuelto', 'rechazado')),
+  resolution TEXT,
+  reported_at TEXT NOT NULL DEFAULT (datetime('now')),
+  resolved_at TEXT,
+  created_by INTEGER REFERENCES users(id)
+);
+CREATE INDEX IF NOT EXISTS idx_warranty_claims_order ON warranty_claims(work_order_id);
+`;
+
 async function getSetting(key, fallback = null) {
   const row = await db.prepare('SELECT value FROM settings WHERE key = ?').get(key);
   return row ? row.value : fallback;
@@ -493,6 +931,23 @@ async function init() {
   ensureColumn('quotations', 'service_fields', 'TEXT');
   ensureReportsTypeCheck();
   ensureQuotationsStateCheck();
+  exec(ERP_SCHEMA_SQL);
+  // Medio de pago de cada abono de cliente (efectivo, transferencia...),
+  // para que Caja cuadre por medio. NULL en abonos viejos = sin dato.
+  ensureColumn('payments', 'method', 'TEXT');
+  // Garantía (meses desde la entrega; se copia del ajuste general al crear
+  // la orden) y factura electrónica: por ahora se emite a mano en el
+  // facturador gratuito de la DIAN y aquí solo se anota el número/CUFE.
+  ensureColumn('work_orders', 'warranty_months', 'INTEGER NOT NULL DEFAULT 6');
+  ensureColumn('work_orders', 'invoice_number', 'TEXT');
+  ensureColumn('work_orders', 'invoice_cufe', 'TEXT');
+  ensureColumn('work_orders', 'received_by', 'TEXT');
+  // Producción (ver PRODUCTION_SCHEMA_SQL): rol nuevo + tablas + las
+  // garantías pasan a colgar de la OP (work_order_id queda para las viejas).
+  ensureUsersRoleCheck();
+  exec(PRODUCTION_SCHEMA_SQL);
+  ensureColumn('warranty_claims', 'production_order_id', 'INTEGER REFERENCES production_orders(id)');
+  ensureWarrantyClaimsNullable();
   await seedIfEmpty();
   await seedQuoteDefaults();
 }

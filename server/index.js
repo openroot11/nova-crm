@@ -77,6 +77,15 @@ async function main() {
   // medio, ver server/nativeQuotes.js.
   app.use('/api/products', require('./routes/products'));
   app.use('/api/quotations', require('./routes/quotations'));
+  // Producción: pedidos, órdenes de producción, tareas, archivos, bloqueos,
+  // control, aprobaciones, documentos y garantías (ver server/production.js).
+  app.use('/api/production', require('./routes/production'));
+  // ERP: operarios, inventario de materiales, compras y caja (apps aparte;
+  // Producción no toca inventario).
+  app.use('/api/workers', require('./routes/workers'));
+  app.use('/api/materials', require('./routes/materials'));
+  app.use('/api/purchases', require('./routes/purchases'));
+  app.use('/api/cash', require('./routes/cash'));
   app.use('/api/kpis', requireRole('admin', 'coordinador'), require('./routes/kpis'));
   app.use('/api/marketing', requireRole('admin', 'coordinador'), require('./routes/marketing'));
   app.use('/api/google-ads', requireRole('admin', 'coordinador'), require('./routes/googleAds'));

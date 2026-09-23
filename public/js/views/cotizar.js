@@ -716,7 +716,9 @@ export async function mount(container, ctx) {
     if (next) {
       buttons.push(`<button type="button" id="cz-next-state" class="btn btn-secondary w-full justify-center">${next.label}</button>`);
     }
+    if (quotation.state === 'aprobada' || quotation.state === 'sale') buttons.push('<div id="cz-wo"></div>');
     el.innerHTML = buttons.join('');
+    renderWorkOrderAction(el.querySelector('#cz-wo'));
     el.querySelector('#cz-whatsapp')?.addEventListener('click', sendWhatsApp);
     el.querySelector('#cz-next-state')?.addEventListener('click', (e) => {
       e.currentTarget.disabled = true;
@@ -824,6 +826,39 @@ export async function mount(container, ctx) {
     const label = quotation ? 'Guardar cambios' : lead ? 'Guardar cotización' : 'Registrar y cotizar';
     actionsEl.innerHTML = `<button type="button" id="cz-save" class="btn btn-primary"><span class="material-symbols-outlined">save</span>${label}</button>`;
     actionsEl.querySelector('#cz-save').addEventListener('click', save);
+  }
+
+  // Producción: una cotización aprobada (o ya vendida) se envía a producción
+  // como Pedido (PED-...), que producción valida y convierte en una o varias
+  // OP. Si ya se envió, el botón lleva a ese pedido.
+  async function renderWorkOrderAction(slot) {
+    if (!slot) return;
+    const forQuotation = quotation.id;
+    let existing = null;
+    try {
+      const list = await ctx.api.get('/api/production/orders');
+      existing = list.find((o) => o.quotation_id === forQuotation && o.status !== 'cancelado') || null;
+    } catch {
+      return; // sin acceso a producción, no se muestra nada
+    }
+    if (!quotation || quotation.id !== forQuotation || !slot.isConnected) return;
+    if (existing) {
+      slot.innerHTML = `<a href="#/pedidos?id=${existing.id}" class="btn btn-secondary w-full justify-center inline-flex"><span class="material-symbols-outlined">precision_manufacturing</span>En producción · ${escapeHtml(existing.number)}</a>`;
+      return;
+    }
+    slot.innerHTML = `<button type="button" class="btn btn-secondary w-full justify-center"><span class="material-symbols-outlined">precision_manufacturing</span>Enviar a producción</button>`;
+    slot.querySelector('button').addEventListener('click', async (e) => {
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      try {
+        const so = await ctx.api.post('/api/production/orders/from-quotation', { quotation_id: quotation.id });
+        ctx.toast(`Enviada a producción como ${so.number}`, 'success');
+        renderWorkOrderAction(slot);
+      } catch (err) {
+        ctx.toast(err.message, 'error');
+        btn.disabled = false;
+      }
+    });
   }
 
   // Abre WhatsApp Web/app con el chat del cliente y un mensaje ya escrito --

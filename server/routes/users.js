@@ -5,7 +5,7 @@ const { broadcast } = require('../realtime');
 
 const router = express.Router();
 
-const ROLES = ['admin', 'coordinador', 'asesor'];
+const ROLES = ['admin', 'coordinador', 'asesor', 'produccion'];
 
 async function serialize(user) {
   const advisor = user.advisor_id ? await db.prepare('SELECT name FROM advisors WHERE id = ?').get(user.advisor_id) : null;
