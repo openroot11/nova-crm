@@ -20,7 +20,7 @@ if (sidebarFoot && user) {
       <p class="text-label-bold font-label-bold truncate">${escapeHtml(user.username)}</p>
       <p class="text-body-sm font-body-sm text-on-surface-variant truncate">${escapeHtml(ROLE_LABELS[user.role] || user.role)}</p>
     </div>
-    <button id="logout-btn" class="p-2 text-on-surface-variant hover:text-error transition-colors shrink-0" title="Cerrar sesión">
+    <button id="logout-btn" type="button" aria-label="Cerrar sesión" class="p-2 text-on-surface-variant hover:text-error transition-colors shrink-0" title="Cerrar sesión">
       <span class="material-symbols-outlined text-[20px]">logout</span>
     </button>
   `;
@@ -36,18 +36,62 @@ const sidebarEl = document.getElementById('sidebar');
 const mainColEl = document.getElementById('main-col');
 const sidebarToggleBtn = document.getElementById('sidebar-toggle-btn');
 
-function applySidebarCollapsed(collapsed) {
-  sidebarEl.classList.toggle('-translate-x-full', collapsed);
-  mainColEl.classList.toggle('ml-[240px]', !collapsed);
-  mainColEl.classList.toggle('ml-0', collapsed);
+// En teléfono/tablet (< 1024px) el menú no empuja el contenido: se abre
+// encima, con un fondo oscuro, y se cierra al elegir una pantalla, al tocar
+// afuera o con Escape. En escritorio sigue como antes (fijo a la izquierda,
+// ocultable y recordado). El ancho del menú (252px) y el margen del
+// contenido (lg:ml-[252px] en index.html) deben coincidir.
+const sidebarBackdrop = document.getElementById('sidebar-backdrop');
+const mobileQuery = window.matchMedia('(max-width: 1023px)');
+let mobileSidebarOpen = false;
+
+function readCollapsed() {
+  try {
+    return localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1';
+  } catch {
+    return false;
+  }
 }
 
-let sidebarCollapsed = localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1';
-applySidebarCollapsed(sidebarCollapsed);
+let sidebarCollapsed = readCollapsed();
+
+function applySidebar() {
+  const mobile = mobileQuery.matches;
+  const hidden = mobile ? !mobileSidebarOpen : sidebarCollapsed;
+  sidebarEl.classList.toggle('-translate-x-full', hidden);
+  sidebarEl.classList.toggle('shadow-xl', mobile && mobileSidebarOpen);
+  mainColEl.classList.toggle('lg:ml-[252px]', !sidebarCollapsed);
+  sidebarBackdrop?.classList.toggle('hidden', !(mobile && mobileSidebarOpen));
+  sidebarToggleBtn.setAttribute('aria-expanded', hidden ? 'false' : 'true');
+}
+
+function closeMobileSidebar() {
+  if (!mobileSidebarOpen) return;
+  mobileSidebarOpen = false;
+  applySidebar();
+}
+
+applySidebar();
 sidebarToggleBtn.addEventListener('click', () => {
-  sidebarCollapsed = !sidebarCollapsed;
-  localStorage.setItem(SIDEBAR_COLLAPSED_KEY, sidebarCollapsed ? '1' : '0');
-  applySidebarCollapsed(sidebarCollapsed);
+  if (mobileQuery.matches) {
+    mobileSidebarOpen = !mobileSidebarOpen;
+  } else {
+    sidebarCollapsed = !sidebarCollapsed;
+    try {
+      localStorage.setItem(SIDEBAR_COLLAPSED_KEY, sidebarCollapsed ? '1' : '0');
+    } catch {
+      /* sin almacenamiento: solo dura esta visita */
+    }
+  }
+  applySidebar();
+});
+sidebarBackdrop?.addEventListener('click', closeMobileSidebar);
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeMobileSidebar();
+});
+mobileQuery.addEventListener('change', () => {
+  mobileSidebarOpen = false;
+  applySidebar();
 });
 
 // Modo oscuro: la clase "dark" en <html> ya la puso (o no) el script en el
@@ -87,6 +131,7 @@ const routes = {
   garantias: () => import('./views/garantias.js'),
   compras: () => import('./views/compras.js'),
   finanzas: () => import('./views/finanzas.js'),
+  facturacion: () => import('./views/facturacion.js'),
   clientes: () => import('./views/clientes.js'),
   informe: () => import('./views/informe.js'),
   'ventas-cerradas': () => import('./views/ventasCerradas.js'),
@@ -136,7 +181,7 @@ function renderSidebar(route, app) {
       active ? 'bg-surface-container-high text-on-surface font-bold border-r-4 border-outline' : 'text-on-surface-variant hover:bg-surface-container-low'
     }`;
   const homeLink = `
-    <li><a href="#/inicio" data-route="inicio" class="${linkCls(route === 'inicio')}">
+    <li><a href="#/inicio" data-route="inicio" class="${linkCls(route === 'inicio')}"${route === 'inicio' ? ' aria-current="page"' : ''}>
       <span class="material-symbols-outlined text-[20px]">apps</span><span class="text-label-bold font-label-bold">Inicio</span></a></li>`;
 
   if (!app) {
@@ -163,11 +208,17 @@ function renderSidebar(route, app) {
     ${items
       .map(
         ([r, label]) => `
-      <li><a href="#/${r}" data-route="${r}" class="${linkCls(r === route)} text-body-sm">${escapeHtml(label)}</a></li>`
+      <li><a href="#/${r}" data-route="${r}" class="${linkCls(r === route)} text-body-sm"${r === route ? ' aria-current="page"' : ''}>${escapeHtml(label)}</a></li>`
       )
       .join('')}
   `;
 }
+
+// Tocar un enlace del menú en teléfono lo cierra (también si es la misma
+// pantalla en la que ya estás, donde no hay hashchange).
+navList.addEventListener('click', (e) => {
+  if (e.target.closest('a[href]')) closeMobileSidebar();
+});
 
 let currentUnmount = null;
 
@@ -179,6 +230,7 @@ async function render() {
 
   const app = appOfRoute(route);
   renderSidebar(route, app);
+  closeMobileSidebar();
 
   const title = routeLabel(route);
   pageTitle.innerHTML = app

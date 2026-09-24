@@ -13,7 +13,7 @@ const router = express.Router();
 router.use(requireRole('admin', 'coordinador'));
 
 const CATEGORIES = {
-  egreso: ['Compra de materiales', 'Arriendo', 'Servicios públicos', 'Nómina y pagos a operarios', 'Transporte y domicilios', 'Herramientas y mantenimiento', 'Publicidad', 'Impuestos', 'Otros gastos'],
+  egreso: erp.EXPENSE_CATEGORIES,
   ingreso: ['Otros ingresos', 'Aporte de socios'],
 };
 const METHODS = ['efectivo', 'transferencia', 'tarjeta', 'nequi', 'otro'];

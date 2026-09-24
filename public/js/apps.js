@@ -61,6 +61,14 @@ export const APPS = [
     routes: [['finanzas', 'Caja y cartera']],
   },
   {
+    key: 'facturacion',
+    label: 'Facturación',
+    desc: 'Facturas de venta, compras y gastos',
+    icon: 'receipt_long',
+    color: '#5B6BBF',
+    routes: [['facturacion', 'Facturas']],
+  },
+  {
     key: 'tableros',
     label: 'Tableros',
     desc: 'Resumen del negocio',
@@ -102,8 +110,8 @@ export const APPS = [
 // de Inventario y los operarios; no ve finanzas ni el embudo comercial.
 const PRODUCCION = ['produccion', 'pedidos', 'programacion', 'op', 'solicitudes-material', 'garantias', 'reportes-produccion'];
 export const ROUTES_BY_ROLE = {
-  admin: ['inicio', 'dashboard1', 'dashboard', 'ventas', 'seguimiento', 'cotizaciones', 'cotizar', ...PRODUCCION, 'inventario', 'compras', 'finanzas', 'clientes', 'informe', 'ventas-cerradas', 'estadisticas', 'reporte', 'asesores', 'operarios', 'ajustes'],
-  coordinador: ['inicio', 'dashboard1', 'dashboard', 'ventas', 'seguimiento', 'cotizaciones', 'cotizar', ...PRODUCCION, 'inventario', 'compras', 'finanzas', 'clientes', 'informe', 'ventas-cerradas', 'estadisticas', 'asesores', 'operarios'],
+  admin: ['inicio', 'dashboard1', 'dashboard', 'ventas', 'seguimiento', 'cotizaciones', 'cotizar', ...PRODUCCION, 'inventario', 'compras', 'finanzas', 'facturacion', 'clientes', 'informe', 'ventas-cerradas', 'estadisticas', 'reporte', 'asesores', 'operarios', 'ajustes'],
+  coordinador: ['inicio', 'dashboard1', 'dashboard', 'ventas', 'seguimiento', 'cotizaciones', 'cotizar', ...PRODUCCION, 'inventario', 'compras', 'finanzas', 'facturacion', 'clientes', 'informe', 'ventas-cerradas', 'estadisticas', 'asesores', 'operarios'],
   produccion: ['inicio', ...PRODUCCION, 'inventario', 'operarios'],
   // Un asesor opera lo suyo: su embudo comercial y el avance en producción
   // de sus clientes (el backend le filtra las OP a las de sus leads).

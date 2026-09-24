@@ -8,6 +8,11 @@ const { db } = require('./db');
 const MOVEMENT_TYPES = ['entrada', 'consumo', 'devolucion', 'ajuste'];
 const UNITS = ['m', 'm2', 'und', 'kg', 'rollo', 'lt'];
 
+// Categorías de gasto: las comparten Caja (cash_entries) y las facturas de
+// compra recibidas (invoices), para que un gasto pagado en efectivo y uno
+// que llegó con factura electrónica se sumen en el mismo rubro.
+const EXPENSE_CATEGORIES = ['Compra de materiales', 'Arriendo', 'Servicios públicos', 'Nómina y pagos a operarios', 'Transporte y domicilios', 'Herramientas y mantenimiento', 'Publicidad', 'Impuestos', 'Otros gastos'];
+
 // Fecha de hoy en Colombia (AAAA-MM-DD).
 function todayBogota(offsetDays = 0) {
   const d = new Date(Date.now() + offsetDays * 86400000);
@@ -48,4 +53,4 @@ async function applyMovement({ material_id, type, qty, unit_cost, work_order_id,
   return run();
 }
 
-module.exports = { MOVEMENT_TYPES, UNITS, todayBogota, nowUtc, applyMovement };
+module.exports = { MOVEMENT_TYPES, UNITS, EXPENSE_CATEGORIES, todayBogota, nowUtc, applyMovement };

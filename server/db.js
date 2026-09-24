@@ -495,6 +495,73 @@ CREATE TABLE IF NOT EXISTS warranty_claims (
 CREATE INDEX IF NOT EXISTS idx_warranty_claims_order ON warranty_claims(work_order_id);
 `;
 
+// ---------------------------------------------------------------------------
+// Facturación electrónica (ver server/einvoice.js y routes/invoices.js).
+// Una sola tabla para lo que Velara factura (direction 'emitida' = ventas)
+// y lo que le facturan sus proveedores (direction 'recibida' = compras y
+// gastos), para poder cruzar IVA generado contra IVA descontable y ventas
+// contra gastos en el mismo periodo. El CUFE es la llave con la que la
+// DIAN identifica cada documento: UNIQUE evita bajar dos veces la misma
+// factura recibida.
+// ---------------------------------------------------------------------------
+const INVOICE_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS invoices (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  direction TEXT NOT NULL CHECK (direction IN ('emitida', 'recibida')),
+  doc_type TEXT NOT NULL DEFAULT 'factura' CHECK (doc_type IN ('factura', 'nota_credito')),
+  number TEXT NOT NULL,
+  cufe TEXT UNIQUE,
+  issue_date TEXT NOT NULL,
+  due_date TEXT,
+  party_name TEXT NOT NULL,
+  party_nit TEXT,
+  party_email TEXT,
+  party_address TEXT,
+  lead_id INTEGER REFERENCES leads(id),
+  supplier_id INTEGER REFERENCES suppliers(id),
+  related_invoice_id INTEGER REFERENCES invoices(id),
+  subtotal REAL NOT NULL DEFAULT 0,
+  iva REAL NOT NULL DEFAULT 0,
+  total REAL NOT NULL DEFAULT 0,
+  -- aceptada/rechazada = respuesta de la DIAN; anulada = tiene nota crédito.
+  status TEXT NOT NULL DEFAULT 'aceptada' CHECK (status IN ('pendiente', 'aceptada', 'rechazada', 'anulada')),
+  payment_status TEXT NOT NULL DEFAULT 'pendiente' CHECK (payment_status IN ('pendiente', 'pagada')),
+  paid_at TEXT,
+  -- Solo facturas recibidas: rubro de gasto (erp.EXPENSE_CATEGORIES) o NULL
+  -- mientras nadie la clasifique; category_source dice si la puso una regla
+  -- aprendida, una palabra clave o una persona.
+  category TEXT,
+  category_source TEXT,
+  notes TEXT,
+  source TEXT NOT NULL DEFAULT 'simulado',
+  created_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_invoices_dir_date ON invoices(direction, issue_date);
+
+CREATE TABLE IF NOT EXISTS invoice_lines (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  invoice_id INTEGER NOT NULL REFERENCES invoices(id),
+  description TEXT NOT NULL,
+  qty REAL NOT NULL DEFAULT 1,
+  unit_price REAL NOT NULL DEFAULT 0,
+  iva_rate REAL NOT NULL DEFAULT 0,
+  subtotal REAL NOT NULL DEFAULT 0,
+  iva REAL NOT NULL DEFAULT 0,
+  position INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_invoice_lines_invoice ON invoice_lines(invoice_id);
+
+-- Reglas aprendidas: cuando alguien clasifica a mano una factura de un
+-- proveedor, las siguientes de ese mismo NIT entran ya clasificadas.
+CREATE TABLE IF NOT EXISTS invoice_category_rules (
+  party_nit TEXT PRIMARY KEY,
+  category TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+`;
+
 async function getSetting(key, fallback = null) {
   const row = await db.prepare('SELECT value FROM settings WHERE key = ?').get(key);
   return row ? row.value : fallback;
@@ -948,6 +1015,9 @@ async function init() {
   exec(PRODUCTION_SCHEMA_SQL);
   ensureColumn('warranty_claims', 'production_order_id', 'INTEGER REFERENCES production_orders(id)');
   ensureWarrantyClaimsNullable();
+  exec(INVOICE_SCHEMA_SQL);
+  // Pago de una factura de compra registrado como egreso de Caja.
+  ensureColumn('cash_entries', 'invoice_id', 'INTEGER REFERENCES invoices(id)');
   await seedIfEmpty();
   await seedQuoteDefaults();
 }

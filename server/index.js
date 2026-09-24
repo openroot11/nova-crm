@@ -86,6 +86,7 @@ async function main() {
   app.use('/api/materials', require('./routes/materials'));
   app.use('/api/purchases', require('./routes/purchases'));
   app.use('/api/cash', require('./routes/cash'));
+  app.use('/api/invoices', require('./routes/invoices'));
   app.use('/api/kpis', requireRole('admin', 'coordinador'), require('./routes/kpis'));
   app.use('/api/marketing', requireRole('admin', 'coordinador'), require('./routes/marketing'));
   app.use('/api/google-ads', requireRole('admin', 'coordinador'), require('./routes/googleAds'));
