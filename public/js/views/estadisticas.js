@@ -100,10 +100,10 @@ export async function mount(container, ctx) {
           <button id="hide-amount-btn" class="px-3 py-2 border border-outline-variant rounded-md text-label-bold font-label-bold text-on-surface-variant hover:bg-surface-container-lowest transition-colors flex items-center gap-1.5">
             <span class="material-symbols-outlined text-[16px]">visibility_off</span> Ocultar monto
           </button>
-          <button id="download-pdf-btn" class="px-3 py-2 bg-on-surface text-surface rounded-md text-label-bold font-label-bold hover:opacity-90 transition-colors flex items-center gap-1.5">
+          <button id="download-pdf-btn" class="btn btn-secondary">
             <span class="material-symbols-outlined text-[16px]">picture_as_pdf</span> Descargar PDF
           </button>
-          <button id="archive-rendimiento-btn" class="px-3 py-2 bg-primary text-on-primary rounded-md text-label-bold font-label-bold hover:bg-on-primary-fixed-variant transition-colors flex items-center gap-1.5">
+          <button id="archive-rendimiento-btn" class="btn btn-primary">
             <span class="material-symbols-outlined text-[16px]">archive</span> Generar y archivar
           </button>
         </div>
@@ -160,10 +160,10 @@ export async function mount(container, ctx) {
             <h4 id="ficha-nombre" class="text-headline-sm font-headline-sm text-on-surface">—</h4>
           </div>
           <div class="flex items-center gap-2 no-print">
-            <button id="ficha-pdf-btn" class="px-3 py-2 bg-on-surface text-surface rounded-md text-label-bold font-label-bold hover:opacity-90 transition-colors flex items-center gap-1.5">
+            <button id="ficha-pdf-btn" class="btn btn-secondary">
               <span class="material-symbols-outlined text-[16px]">picture_as_pdf</span> PDF de esta ficha
             </button>
-            <button id="ficha-archive-btn" class="px-3 py-2 bg-primary text-on-primary rounded-md text-label-bold font-label-bold hover:bg-on-primary-fixed-variant transition-colors flex items-center gap-1.5">
+            <button id="ficha-archive-btn" class="btn btn-primary">
               <span class="material-symbols-outlined text-[16px]">archive</span> Generar y archivar
             </button>
           </div>
@@ -296,7 +296,7 @@ export async function mount(container, ctx) {
             <label class="block text-[10px] font-label-bold text-on-surface-variant mb-1 uppercase tracking-wider">Hasta</label>
             <input id="profit-to" type="date" class="p-2 bg-surface-container-lowest border border-outline-variant rounded-md text-body-sm outline-none focus:border-outline" />
           </div>
-          <button id="archive-rentabilidad-btn" class="px-3 py-2 bg-primary text-on-primary rounded-md text-label-bold font-label-bold hover:bg-on-primary-fixed-variant transition-colors flex items-center gap-1.5">
+          <button id="archive-rentabilidad-btn" class="btn btn-primary">
             <span class="material-symbols-outlined text-[16px]">archive</span> Generar y archivar
           </button>
         </div>
@@ -622,7 +622,7 @@ export async function mount(container, ctx) {
             <span class="${selected ? 'text-on-secondary-container' : 'text-on-surface-variant'}">${a.asignados} · ${pct}%</span>
           </div>
           <div class="h-2 bg-surface-container-low rounded-full overflow-hidden">
-            <div class="h-full ${selected ? 'bg-secondary' : 'bg-primary'} rounded-full" style="width:${Math.max(2, pct)}%"></div>
+            <div class="h-full ${selected ? 'bg-secondary' : 'bg-on-surface-variant'} rounded-full" style="width:${Math.max(2, pct)}%"></div>
           </div>
         </div>`;
       })

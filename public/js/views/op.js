@@ -214,8 +214,8 @@ export async function mount(container, ctx) {
       </div>
       ${op.status === 'por_validar' && op.missing.length ? `<div class="mb-3 px-4 py-2.5 rounded-lg border border-tertiary/50 bg-tertiary-container/30 text-body-sm text-on-surface"><b>Falta para programar:</b> ${escapeHtml(op.missing.join(', '))}</div>` : ''}
       ${op.blocked ? `<div class="mb-3 px-4 py-2.5 rounded-lg border border-error/50 bg-error-container/30 text-body-sm text-on-surface"><b>🔴 OP bloqueada:</b> ${escapeHtml(op.block_reason_label)} — ve a la pestaña <button data-go="bloqueos" class="underline">Bloqueos</button>.</div>` : ''}
-      <div class="flex gap-1 border-b border-outline-variant mb-gutter overflow-x-auto" role="tablist">
-        ${TABS.map(([k, label, icon]) => `<button data-tab="${k}" role="tab" aria-selected="${k === tab}" class="px-3 py-2.5 -mb-px border-b-2 text-body-sm whitespace-nowrap inline-flex items-center gap-1.5 ${k === tab ? 'border-primary text-on-surface font-bold' : 'border-transparent text-on-surface-variant hover:text-on-surface'}"><span class="material-symbols-outlined text-[17px]">${icon}</span>${label}${badgeFor(k)}</button>`).join('')}
+      <div class="flex gap-1 border-b border-outline-variant mb-gutter overflow-x-auto overflow-y-hidden" role="tablist">
+        ${TABS.map(([k, label, icon]) => `<button data-tab="${k}" role="tab" aria-selected="${k === tab}" class="px-3 py-2.5 -mb-px border-b-2 text-body-sm whitespace-nowrap inline-flex items-center gap-1.5 ${k === tab ? 'border-on-surface text-on-surface font-bold' : 'border-transparent text-on-surface-variant hover:text-on-surface'}"><span class="material-symbols-outlined text-[17px]">${icon}</span>${label}${badgeFor(k)}</button>`).join('')}
       </div>`;
   }
 
@@ -547,7 +547,7 @@ export async function mount(container, ctx) {
       <ol class="relative border-l border-outline-variant ml-2 space-y-3">
         ${op.activity.map((a) => `
           <li class="ml-4">
-            <span class="absolute -left-[5px] mt-1.5 w-2.5 h-2.5 rounded-full ${a.entity === 'pedido' ? 'bg-outline' : 'bg-primary'}"></span>
+            <span class="absolute -left-[5px] mt-1.5 w-2.5 h-2.5 rounded-full ${a.entity === 'pedido' ? 'bg-outline' : 'bg-on-surface-variant'}"></span>
             <p class="text-[11px] text-on-surface-variant">${fmtDateTime(a.created_at)} · ${escapeHtml(a.user_name)}${a.entity === 'pedido' ? ' · Pedido' : ''}</p>
             <p class="text-body-sm text-on-surface font-bold">${escapeHtml(a.action)}</p>
             ${a.detail ? `<p class="text-[12px] text-on-surface-variant">${escapeHtml(a.detail)}</p>` : ''}

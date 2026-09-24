@@ -81,7 +81,7 @@ function stepCard(number, icon, title, desc, innerHtml, extraHeaderHtml = '') {
     <div class="bg-surface rounded-xl border border-outline-variant shadow-sm p-5">
       <div class="flex items-center justify-between gap-3 mb-3 flex-wrap">
         <div class="flex items-center gap-3">
-          <span class="w-7 h-7 rounded-full bg-primary text-on-primary flex items-center justify-center text-body-sm font-bold shrink-0">${number}</span>
+          <span class="w-7 h-7 rounded-full bg-on-surface text-surface flex items-center justify-center text-body-sm font-bold shrink-0">${number}</span>
           <div>
             <h3 class="text-body-md font-body-md font-bold text-on-surface flex items-center gap-1.5"><span class="material-symbols-outlined text-[16px] text-on-surface-variant">${icon}</span>${title}</h3>
             ${desc ? `<p class="text-[11px] text-on-surface-variant">${desc}</p>` : ''}
@@ -162,7 +162,7 @@ export async function mount(container, ctx) {
         ${STATE_STEPS.map((s, i) => {
           const done = i < currentIdx;
           const current = i === currentIdx;
-          const dotCls = current ? 'bg-primary' : done ? 'bg-primary/60' : 'bg-surface-container-high';
+          const dotCls = current ? 'bg-on-surface' : done ? 'bg-on-surface-variant' : 'bg-surface-container-high';
           const textCls = current ? 'text-on-surface font-bold' : done ? 'text-on-surface-variant' : 'text-on-surface-variant/70';
           return `
             <div class="flex items-center gap-2">
@@ -184,7 +184,7 @@ export async function mount(container, ctx) {
             const active = quotation && q.id === quotation.id;
             return `<button type="button" data-hist="${q.id}" class="px-2.5 py-1 rounded-full text-[11px] font-bold border transition-colors ${
               active
-                ? 'bg-primary text-on-primary border-primary'
+                ? 'bg-on-surface text-surface border-on-surface'
                 : 'border-outline-variant text-on-surface-variant hover:bg-surface-container-low'
             }">${escapeHtml(q.number || '—')} · ${formatMoney(q.amount_total)}</button>`;
           })
@@ -633,7 +633,7 @@ export async function mount(container, ctx) {
     return `
       <div class="bg-surface rounded-xl border border-outline-variant shadow-sm p-5">
         <div class="flex items-center gap-2 mb-4">
-          <span class="material-symbols-outlined text-[20px] text-primary">receipt_long</span>
+          <span class="material-symbols-outlined text-[20px] text-on-surface-variant">receipt_long</span>
           <h3 class="text-body-md font-body-md font-bold text-on-surface">Resumen de cotización</h3>
           <span class="ml-auto px-2 py-0.5 rounded text-[10px] font-bold shrink-0 ${badgeCls}">${badgeLabel}</span>
         </div>
@@ -664,15 +664,15 @@ export async function mount(container, ctx) {
             ? `<div class="border-t border-outline-variant pt-4">
                  <p class="text-[10px] font-label-bold uppercase tracking-wide text-on-surface-variant mb-2">Acciones adicionales</p>
                  <div class="flex flex-col gap-1">
-                   <button type="button" id="cz-duplicate" class="text-left text-body-sm text-on-surface hover:text-primary flex items-center gap-1.5 py-1"><span class="material-symbols-outlined text-[16px]">content_copy</span>Duplicar cotización</button>
+                   <button type="button" id="cz-duplicate" class="text-left text-body-sm text-on-surface hover:underline flex items-center gap-1.5 py-1"><span class="material-symbols-outlined text-[16px]">content_copy</span>Duplicar cotización</button>
                    ${
                      quotation.state !== 'sale'
-                       ? `<button type="button" id="cz-confirm" class="text-left text-body-sm text-on-surface hover:text-primary flex items-center gap-1.5 py-1"><span class="material-symbols-outlined text-[16px]">task_alt</span>Convertir en venta</button>`
+                       ? `<button type="button" id="cz-confirm" class="text-left text-body-sm text-on-surface hover:underline flex items-center gap-1.5 py-1"><span class="material-symbols-outlined text-[16px]">task_alt</span>Convertir en venta</button>`
                        : ''
                    }
                    ${
                      lead?.client_id
-                       ? `<button type="button" id="cz-view-client" class="text-left text-body-sm text-on-surface hover:text-primary flex items-center gap-1.5 py-1"><span class="material-symbols-outlined text-[16px]">badge</span>Ver historial del cliente</button>`
+                       ? `<button type="button" id="cz-view-client" class="text-left text-body-sm text-on-surface hover:underline flex items-center gap-1.5 py-1"><span class="material-symbols-outlined text-[16px]">badge</span>Ver historial del cliente</button>`
                        : ''
                    }
                    ${

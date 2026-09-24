@@ -185,7 +185,7 @@ export async function mount(container, ctx) {
         <td class="p-table-cell-padding text-right">
           <div class="flex justify-end gap-2">
             <a href="/api/quotations/${r.id}/pdf" target="_blank" rel="noopener" class="px-2.5 py-1.5 border border-outline-variant rounded-md text-[11px] font-label-bold text-on-surface-variant hover:bg-surface-container-low transition-colors inline-flex items-center gap-1"><span class="material-symbols-outlined text-[13px]">picture_as_pdf</span>PDF</a>
-            <button data-lead="${r.lead_id}" data-quotation="${r.id}" class="cot-open px-2.5 py-1.5 bg-primary text-on-primary rounded-md text-[11px] font-label-bold hover:opacity-90 transition-colors">Abrir</button>
+            <button data-lead="${r.lead_id}" data-quotation="${r.id}" class="cot-open btn btn-secondary px-2.5 py-1.5">Abrir</button>
           </div>
         </td>
       </tr>`;

@@ -267,7 +267,7 @@ export async function mount(container, ctx) {
               <p class="text-[11px] text-on-surface-variant mt-1">Úsalo para meter clientes atrasados con su fecha real — así los reportes cuadran.</p>
             </div>
           </div>
-          <button type="submit" class="w-full py-3 bg-primary text-on-primary rounded-md font-label-bold text-label-bold hover:bg-on-primary-fixed-variant transition-colors flex items-center justify-center shadow-sm">
+          <button type="submit" class="btn btn-primary w-full py-3">
             <span class="material-symbols-outlined mr-2 text-[18px]">how_to_reg</span>
             REGISTRAR CLIENTE Y ASIGNAR
           </button>
@@ -282,7 +282,7 @@ export async function mount(container, ctx) {
           </div>
           <div class="flex items-center gap-3">
             ${canCreate ? `
-            <button type="button" id="new-client-toggle-btn" class="px-3 py-2 bg-primary text-on-primary rounded-md text-label-bold font-label-bold hover:bg-on-primary-fixed-variant transition-colors flex items-center gap-1.5">
+            <button type="button" id="new-client-toggle-btn" class="btn btn-primary">
               <span class="material-symbols-outlined text-[18px]">person_add</span> Nuevo Cliente
             </button>` : ''}
             <div class="relative hidden md:block">
@@ -339,7 +339,7 @@ export async function mount(container, ctx) {
           </label>
           <button id="filter-clear" class="px-3 py-2 rounded-md border border-outline-variant text-body-sm font-label-bold text-on-surface-variant hover:bg-surface-container-lowest transition-colors">Limpiar filtros</button>
           ${canCreate ? `
-          <button id="export-xlsx-btn" class="ml-auto px-3 py-2 bg-primary text-on-primary rounded-md text-label-bold font-label-bold hover:bg-on-primary-fixed-variant transition-colors flex items-center gap-1.5" title="Descarga en Excel los leads que cumplen los filtros de arriba">
+          <button id="export-xlsx-btn" class="ml-auto btn btn-secondary" title="Descarga en Excel los leads que cumplen los filtros de arriba">
             <span class="material-symbols-outlined text-[18px]">download</span> Generar informe
           </button>` : ''}
         </div>

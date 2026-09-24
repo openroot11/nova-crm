@@ -23,7 +23,7 @@ export async function mount(container, ctx) {
           <option value="week">Semanal</option>
           <option value="month">Mensual</option>
         </select>
-        <button id="forecast-refresh" class="px-4 py-2 bg-primary text-on-primary rounded-md text-label-bold font-label-bold hover:bg-on-primary-fixed-variant transition-colors">Actualizar</button>
+        <button id="forecast-refresh" class="btn btn-primary">Actualizar</button>
       </div>
     </div>
 

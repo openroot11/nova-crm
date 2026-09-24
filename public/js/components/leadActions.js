@@ -59,8 +59,8 @@ export async function openAssignModal(lead, ctx, onDone) {
           ${advisors.map((a) => `<option value="${a.id}">${escapeHtml(a.name)}</option>`).join('')}
         </select>
         <div class="flex justify-end gap-2">
-          <button id="assign-cancel" class="px-4 py-2 rounded-lg border border-outline-variant hover:bg-surface-container-low">Cancelar</button>
-          <button id="assign-ok" class="px-4 py-2 rounded-lg bg-primary text-on-primary font-bold hover:bg-on-primary-fixed-variant">Asignar</button>
+          <button id="assign-cancel" class="btn btn-secondary">Cancelar</button>
+          <button id="assign-ok" class="btn btn-primary">Asignar</button>
         </div>
       `;
       body.querySelector('#assign-cancel').addEventListener('click', close);
@@ -116,8 +116,8 @@ export async function openReassignModal(lead, ctx, onDone) {
         <input id="reassign-reason" type="text" placeholder="Ej. Sin respuesta, ausencia..." class="w-full p-2.5 border border-outline-variant rounded-md mb-4 outline-none focus:border-outline focus:ring-2 focus:ring-outline/20" />
         ${dateFieldHtml('reassign-at')}
         <div class="flex justify-end gap-2">
-          <button id="reassign-cancel" class="px-4 py-2 rounded-lg border border-outline-variant hover:bg-surface-container-low">Cancelar</button>
-          <button id="reassign-ok" class="px-4 py-2 rounded-lg bg-primary text-on-primary font-bold hover:bg-on-primary-fixed-variant">Reasignar</button>
+          <button id="reassign-cancel" class="btn btn-secondary">Cancelar</button>
+          <button id="reassign-ok" class="btn btn-primary">Reasignar</button>
         </div>
       `;
       body.querySelector('#reassign-cancel').addEventListener('click', close);
@@ -149,8 +149,8 @@ export function markContacted(lead, ctx, onDone) {
       body.innerHTML = `
         ${dateFieldHtml('contact-at', 'Fecha y hora del contacto')}
         <div class="flex justify-end gap-2">
-          <button id="contact-cancel" class="px-4 py-2 rounded-lg border border-outline-variant hover:bg-surface-container-low">Cancelar</button>
-          <button id="contact-ok" class="px-4 py-2 rounded-lg bg-primary text-on-primary font-bold hover:bg-on-primary-fixed-variant">Confirmar</button>
+          <button id="contact-cancel" class="btn btn-secondary">Cancelar</button>
+          <button id="contact-ok" class="btn btn-primary">Confirmar</button>
         </div>
       `;
       body.querySelector('#contact-cancel').addEventListener('click', close);
@@ -176,8 +176,8 @@ export function markQuoted(lead, ctx, onDone) {
       body.innerHTML = `
         ${dateFieldHtml('quote-at', 'Fecha y hora de la cotización')}
         <div class="flex justify-end gap-2">
-          <button id="quote-cancel" class="px-4 py-2 rounded-lg border border-outline-variant hover:bg-surface-container-low">Cancelar</button>
-          <button id="quote-ok" class="px-4 py-2 rounded-lg bg-primary text-on-primary font-bold hover:bg-on-primary-fixed-variant">Confirmar</button>
+          <button id="quote-cancel" class="btn btn-secondary">Cancelar</button>
+          <button id="quote-ok" class="btn btn-primary">Confirmar</button>
         </div>
       `;
       body.querySelector('#quote-cancel').addEventListener('click', close);
@@ -597,8 +597,8 @@ export function openCloseModal(lead, ctx, onDone) {
         </div>
         ${dateFieldHtml('close-at', 'Fecha y hora del cierre')}
         <div class="flex justify-end gap-2">
-          <button id="close-cancel" class="px-4 py-2 rounded-lg border border-outline-variant hover:bg-surface-container-low">Cancelar</button>
-          <button id="close-ok" class="px-4 py-2 rounded-lg bg-primary text-on-primary font-bold hover:bg-on-primary-fixed-variant">Confirmar cierre</button>
+          <button id="close-cancel" class="btn btn-secondary">Cancelar</button>
+          <button id="close-ok" class="btn btn-primary">Confirmar cierre</button>
         </div>
       `;
       let result = 'ganado';
@@ -709,8 +709,8 @@ export function openEditLeadModal(lead, ctx, onDone) {
         <label class="block text-label-bold font-label-bold uppercase tracking-wide text-on-surface-variant mb-1">Notas</label>
         <textarea id="edit-notas" rows="3" class="w-full p-2.5 border border-outline-variant rounded-md mb-4 outline-none focus:border-outline focus:ring-2 focus:ring-outline/20">${escapeHtml(lead.notes || '')}</textarea>
         <div class="flex justify-end gap-2">
-          <button id="edit-cancel" class="px-4 py-2 rounded-lg border border-outline-variant hover:bg-surface-container-low">Cancelar</button>
-          <button id="edit-ok" class="px-4 py-2 rounded-lg bg-primary text-on-primary font-bold hover:bg-on-primary-fixed-variant">Guardar cambios</button>
+          <button id="edit-cancel" class="btn btn-secondary">Cancelar</button>
+          <button id="edit-ok" class="btn btn-primary">Guardar cambios</button>
         </div>
       `;
       const productoSelect = body.querySelector('#edit-producto');

@@ -50,6 +50,11 @@
     --c-on-primary-container: #7A2A10;
     --c-inverse-primary: #FF8F5E;
     --c-surface-tint: #C7420E;
+    /* Hover del boton principal: el naranja profundo de marca (accent.deep). */
+    --c-primary-hover: #C7420E;
+    /* Relleno de checkbox/radio marcados: neutro (el naranja es solo para
+       logo y boton principal). */
+    --c-check: #1B1B1B;
 
     --c-secondary: #2a78d6;
     --c-on-secondary: #ffffff;
@@ -102,6 +107,8 @@
     --c-on-primary-container: #FFE7DA;
     --c-inverse-primary: #FF5A1F;
     --c-surface-tint: #FF8F5E;
+    --c-primary-hover: #FFAA85;
+    --c-check: #8B857C;
 
     --c-secondary: #8AC0F5;
     --c-on-secondary: #062347;
@@ -200,6 +207,7 @@
           background: 'var(--c-background)',
           'surface-container-highest': 'var(--c-surface-container-highest)',
           primary: 'var(--c-primary)',
+          'primary-hover': 'var(--c-primary-hover)',
           'surface-container': 'var(--c-surface-container)',
           'on-primary-fixed': '#3A1200',
           // Escala de estado fija (buena/advertencia/grave/critica) para
@@ -280,6 +288,53 @@
        <button class="btn btn-primary" data-loading>...</button>  -- data-loading = estado "loading"
 -->
 <style type="text/tailwindcss">
+  /* Base: el plugin "forms" de Tailwind pinta todos los campos con fondo
+     blanco fijo y anillo de foco azul. En modo oscuro eso dejaba texto casi
+     blanco sobre fondo blanco (ilegible) en los campos que no traian su
+     propia clase de fondo. Aqui se reemplaza por los tokens del tema, y
+     color-scheme hace que calendarios, selects y barras nativas del
+     navegador tambien se vean oscuros. Las clases utilitarias de cada vista
+     (bg-*, border-*, focus:*) siguen ganando porque van en otra capa. */
+  @layer base {
+    :root { color-scheme: light; }
+    :root.dark { color-scheme: dark; }
+    [type='text'], input:where(:not([type])), [type='email'], [type='url'], [type='password'],
+    [type='number'], [type='date'], [type='datetime-local'], [type='month'], [type='search'],
+    [type='tel'], [type='time'], [type='week'], [multiple], textarea, select {
+      background-color: var(--c-surface-container-lowest);
+      color: var(--c-on-surface);
+      border-color: var(--c-outline-variant);
+    }
+    [type='text']:focus, input:where(:not([type])):focus, [type='email']:focus, [type='url']:focus,
+    [type='password']:focus, [type='number']:focus, [type='date']:focus, [type='datetime-local']:focus,
+    [type='month']:focus, [type='search']:focus, [type='tel']:focus, [type='time']:focus,
+    [type='week']:focus, [multiple]:focus, textarea:focus, select:focus {
+      --tw-ring-color: color-mix(in srgb, var(--c-outline) 35%, transparent);
+      border-color: var(--c-outline);
+    }
+    ::placeholder { color: var(--c-outline); opacity: 1; }
+    [type='checkbox'], [type='radio'] {
+      color: var(--c-check);
+      border-color: var(--c-outline);
+      background-color: var(--c-surface-container-lowest);
+    }
+    [type='checkbox']:focus, [type='radio']:focus { --tw-ring-color: var(--c-outline); }
+    /* Foco visible para teclado en enlaces y botones que no traen el suyo
+       (los .btn ya tienen su anillo). :where() = especificidad cero, asi
+       cualquier clase de la vista lo puede sobrescribir. */
+    :where(a, button, summary, [role='tab'], [tabindex]):focus-visible {
+      outline: 2px solid var(--c-outline);
+      outline-offset: 2px;
+    }
+  }
+
+  /* Telefono: titulos y cifras grandes un paso mas chicos para que quepan
+     sin desbordar (el tamaño de escritorio no cambia). */
+  @media (max-width: 639px) {
+    #view-root .text-headline-lg { font-size: 24px; line-height: 32px; }
+    #view-root .text-display-kpi { font-size: 36px; line-height: 42px; }
+  }
+
   @layer components {
     .btn {
       @apply relative inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2
@@ -293,7 +348,7 @@
     /* Primary: accion principal de la pantalla/formulario -- una sola por vista. */
     .btn-primary {
       @apply bg-primary text-on-primary shadow-sm
-             hover:bg-on-primary-fixed-variant active:brightness-90;
+             hover:bg-primary-hover active:brightness-90;
     }
     /* Secondary: accion alterna, no destructiva -- mismo patron "tonal
        outline" que ya usaban SLA/Seguimiento a mano (bg-surface-container-
@@ -361,7 +416,7 @@
 <body class="bg-background font-body-md text-on-background min-h-screen flex">
 
 <!-- Sidebar -->
-<nav id="sidebar" class="fixed left-0 top-0 h-screen w-[252px] bg-surface border-r border-outline-variant flex flex-col z-40 transition-transform duration-200 ease-in-out">
+<nav id="sidebar" aria-label="Menú principal" class="fixed left-0 top-0 h-screen w-[252px] max-w-[85vw] bg-surface border-r border-outline-variant flex flex-col z-40 transition-transform duration-200 ease-in-out">
   <div class="p-5 flex items-center gap-3">
     <!-- Marca VELARA: logo real del diseñador (cabeza felina de perfil),
          ver logo.png / logo-mark.png (recorte solo del ícono) en public/img/. -->
@@ -385,29 +440,32 @@
 </nav>
 
 <!-- Main column -->
-<div id="main-col" class="flex-1 ml-[240px] flex flex-col min-h-screen transition-[margin] duration-200 ease-in-out">
-  <header id="topbar" class="flex justify-between items-center w-full h-16 px-margin-desktop sticky top-0 z-30 bg-surface border-b border-outline-variant">
-    <div class="flex items-center gap-2">
-      <button id="sidebar-toggle-btn" class="p-2 -ml-2 text-on-surface-variant hover:text-on-surface hover:bg-surface-container-low rounded-lg transition-colors" title="Mostrar/ocultar menú">
+<!-- Fondo oscuro detras del menu cuando se abre en telefono/tablet (app.js). -->
+<div id="sidebar-backdrop" class="fixed inset-0 z-[35] bg-black/40 hidden" aria-hidden="true"></div>
+
+<div id="main-col" class="flex-1 min-w-0 lg:ml-[252px] flex flex-col min-h-screen transition-[margin] duration-200 ease-in-out">
+  <header id="topbar" class="flex justify-between items-center gap-2 w-full h-16 px-margin-mobile sm:px-margin-desktop sticky top-0 z-30 bg-surface border-b border-outline-variant">
+    <div class="flex items-center gap-2 min-w-0">
+      <button id="sidebar-toggle-btn" type="button" aria-label="Mostrar u ocultar el menú" aria-controls="sidebar" class="p-2 -ml-2 shrink-0 text-on-surface-variant hover:text-on-surface hover:bg-surface-container-low rounded-lg transition-colors" title="Mostrar/ocultar menú">
         <span class="material-symbols-outlined">menu</span>
       </button>
-      <h2 id="page-title" class="text-headline-sm font-headline-sm font-bold text-on-surface">Velara CRM</h2>
+      <h2 id="page-title" class="text-headline-sm font-headline-sm font-bold text-on-surface truncate min-w-0">Velara CRM</h2>
     </div>
-    <div class="flex items-center gap-4">
+    <div class="flex items-center gap-4 shrink-0">
       <!-- El buscador y la campana de notificaciones vivian aqui fijos en
            todas las pantallas; ahora cada vista los monta donde le sirven
            (hoy solo Ventas, ver ventas.js) para que este encabezado quede
            limpio en el resto. -->
-      <button id="theme-toggle-btn" class="p-2 text-on-surface-variant hover:text-on-surface hover:bg-surface-container-low rounded-lg transition-colors" title="Cambiar a tema oscuro/claro">
+      <button id="theme-toggle-btn" type="button" aria-label="Cambiar tema claro/oscuro" class="p-2 text-on-surface-variant hover:text-on-surface hover:bg-surface-container-low rounded-lg transition-colors" title="Cambiar a tema oscuro/claro">
         <span id="theme-toggle-icon" class="material-symbols-outlined text-[20px]">dark_mode</span>
       </button>
       <span id="conn-dot" class="w-2 h-2 rounded-full bg-outline-variant ml-1" title="Conectando…"></span>
     </div>
   </header>
-  <main id="view-root" class="flex-1 p-margin-desktop"></main>
+  <main id="view-root" class="flex-1 min-w-0 p-margin-mobile sm:p-margin-desktop"></main>
 </div>
 
-<div id="toast-root" class="fixed bottom-4 right-4 z-[100] flex flex-col gap-2"></div>
+<div id="toast-root" class="fixed bottom-4 right-4 left-4 sm:left-auto z-[100] flex flex-col items-end gap-2" role="status" aria-live="polite"></div>
 
 <script type="module" src="/js/auth.js"></script>
 </body>

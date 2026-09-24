@@ -61,7 +61,7 @@ export function blockChip(op) {
 }
 
 export function progressBar(pct) {
-  return `<div class="h-1.5 rounded-full bg-surface-container-high overflow-hidden" title="${pct}% de las tareas"><div class="h-full bg-primary" style="width:${Math.max(0, Math.min(100, pct))}%"></div></div>`;
+  return `<div class="h-1.5 rounded-full bg-surface-container-high overflow-hidden" title="${pct}% de las tareas"><div class="h-full bg-on-surface-variant" style="width:${Math.max(0, Math.min(100, pct))}%"></div></div>`;
 }
 
 const WEEKDAYS = ['dom', 'lun', 'mar', 'mié', 'jue', 'vie', 'sáb'];

@@ -51,7 +51,7 @@ export async function mount(container, ctx) {
         <button id="vc-export-btn" class="px-3 py-2 rounded-md border border-outline-variant text-body-sm font-label-bold text-on-surface-variant hover:bg-surface-container-lowest transition-colors flex items-center gap-1.5" title="Descarga en Excel las ventas cerradas que cumplen los filtros de arriba: cliente, referencia de venta y total">
           <span class="material-symbols-outlined text-[18px]">download</span> Exportar Excel
         </button>
-        <button id="btn-quick-sale" class="px-3 py-2 bg-primary text-on-primary rounded-md font-label-bold text-label-bold hover:opacity-90 transition-colors flex items-center gap-1.5">
+        <button id="btn-quick-sale" class="btn btn-primary">
           <span class="material-symbols-outlined text-[18px]">bolt</span> Registrar venta
         </button>
       </div>

@@ -32,7 +32,7 @@ export async function mount(container, ctx) {
         <h2 class="text-headline-lg font-headline-lg text-on-surface">Clientes</h2>
         <p class="text-body-md font-body-md text-on-surface-variant mt-1">Ficha por cliente — historial de pedidos y abonos en un solo lugar, sin repetir la misma persona en cada pedido.</p>
       </div>
-      <button id="new-client-btn" class="px-4 py-2 bg-primary text-on-primary rounded-md font-label-bold text-label-bold hover:bg-on-primary-fixed-variant transition-colors flex items-center gap-2">
+      <button id="new-client-btn" class="btn btn-primary">
         <span class="material-symbols-outlined text-[18px]">person_add</span> Nuevo cliente
       </button>
     </div>
@@ -275,8 +275,8 @@ export async function mount(container, ctx) {
             </div>
             <p id="new-client-error" class="text-body-sm font-body-sm text-error hidden"></p>
             <div class="flex justify-end gap-2">
-              <button id="new-client-cancel" class="px-4 py-2 rounded-lg border border-outline-variant hover:bg-surface-container-low">Cancelar</button>
-              <button id="new-client-ok" class="px-4 py-2 bg-primary text-on-primary rounded-lg font-label-bold hover:bg-on-primary-fixed-variant">Crear cliente</button>
+              <button id="new-client-cancel" class="btn btn-secondary">Cancelar</button>
+              <button id="new-client-ok" class="btn btn-primary">Crear cliente</button>
             </div>
           </div>
         `;
@@ -375,8 +375,8 @@ export async function mount(container, ctx) {
           <label class="block text-label-bold font-label-bold uppercase tracking-wide text-on-surface-variant mb-1">Nota (opcional)</label>
           <input id="pay-notes" type="text" placeholder="Ej. Transferencia, efectivo..." class="w-full p-2.5 border border-outline-variant rounded-md mb-4 outline-none focus:border-outline focus:ring-2 focus:ring-outline/20" />
           <div class="flex justify-end gap-2">
-            <button id="pay-cancel" class="px-4 py-2 rounded-lg border border-outline-variant hover:bg-surface-container-low">Cancelar</button>
-            <button id="pay-ok" class="px-4 py-2 rounded-lg bg-primary text-on-primary font-bold hover:bg-on-primary-fixed-variant">Guardar abono</button>
+            <button id="pay-cancel" class="btn btn-secondary">Cancelar</button>
+            <button id="pay-ok" class="btn btn-primary">Guardar abono</button>
           </div>
         `;
         body.querySelector('#pay-cancel').addEventListener('click', close);
@@ -408,8 +408,8 @@ export async function mount(container, ctx) {
           <label class="block text-label-bold font-label-bold uppercase tracking-wide text-on-surface-variant mb-1">Monto (COP)</label>
           <input id="amount-input" type="number" min="0" step="1000" value="${lead.amount || 0}" class="w-full p-2.5 border border-outline-variant rounded-md mb-4 outline-none focus:border-outline focus:ring-2 focus:ring-outline/20" />
           <div class="flex justify-end gap-2">
-            <button id="amount-cancel" class="px-4 py-2 rounded-lg border border-outline-variant hover:bg-surface-container-low">Cancelar</button>
-            <button id="amount-ok" class="px-4 py-2 rounded-lg bg-primary text-on-primary font-bold hover:bg-on-primary-fixed-variant">Guardar</button>
+            <button id="amount-cancel" class="btn btn-secondary">Cancelar</button>
+            <button id="amount-ok" class="btn btn-primary">Guardar</button>
           </div>
         `;
         const input = body.querySelector('#amount-input');
@@ -444,8 +444,8 @@ export async function mount(container, ctx) {
           <label class="block text-label-bold font-label-bold uppercase tracking-wide text-on-surface-variant mb-1">Nota (opcional)</label>
           <input id="pay-edit-notes" type="text" value="${escapeHtml(payment.notes || '')}" class="w-full p-2.5 border border-outline-variant rounded-md mb-4 outline-none focus:border-outline focus:ring-2 focus:ring-outline/20" />
           <div class="flex justify-end gap-2">
-            <button id="pay-edit-cancel" class="px-4 py-2 rounded-lg border border-outline-variant hover:bg-surface-container-low">Cancelar</button>
-            <button id="pay-edit-ok" class="px-4 py-2 rounded-lg bg-primary text-on-primary font-bold hover:bg-on-primary-fixed-variant">Guardar</button>
+            <button id="pay-edit-cancel" class="btn btn-secondary">Cancelar</button>
+            <button id="pay-edit-ok" class="btn btn-primary">Guardar</button>
           </div>
         `;
         body.querySelector('#pay-edit-cancel').addEventListener('click', close);

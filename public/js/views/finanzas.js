@@ -1,6 +1,7 @@
 import { escapeHtml, formatMoney } from '../utils.js';
 import { openModal, confirmModal } from '../components/modal.js';
 import { findService } from '../data/velaraServices.js';
+import { statCard as kpi, tabBarHtml, paintTabBar, mountDateRange, isoDate as iso, DATE_PRESETS, ratioBar } from '../components/ui.js';
 
 // Finanzas (ERP): Caja (lo que entra y sale en el periodo), Cartera (quién
 // debe) y Rentabilidad (cuánto deja cada trabajo entregado). Los ingresos
@@ -19,37 +20,10 @@ const TABS = [
 const inputCls = 'w-full p-2.5 border border-outline-variant rounded-md outline-none focus:border-outline bg-surface-container-lowest';
 const labelCls = 'block text-[10px] font-label-bold uppercase tracking-wider text-on-surface-variant mb-1';
 
-function iso(d) {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
 function fmtDate(value) {
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(value || '');
   return m ? `${m[3]}/${m[2]}/${m[1]}` : '—';
 }
-const PRESETS = {
-  hoy: () => {
-    const t = iso(new Date());
-    return [t, t];
-  },
-  mes: () => {
-    const d = new Date();
-    return [iso(new Date(d.getFullYear(), d.getMonth(), 1)), iso(d)];
-  },
-  mes_pasado: () => {
-    const d = new Date();
-    return [iso(new Date(d.getFullYear(), d.getMonth() - 1, 1)), iso(new Date(d.getFullYear(), d.getMonth(), 0))];
-  },
-};
-
-function kpi(label, value, hint = '', tone = '') {
-  return `
-    <div class="border ${tone === 'bad' ? 'border-error/40' : 'border-outline-variant'} rounded-xl p-4 bg-surface-container-lowest">
-      <p class="text-[10px] font-label-bold text-on-surface-variant uppercase tracking-wider mb-1">${label}</p>
-      <p class="text-headline-sm font-headline-sm ${tone === 'bad' ? 'text-error' : tone === 'good' ? 'text-secondary' : 'text-on-surface'}">${value}</p>
-      ${hint ? `<p class="text-[11px] text-on-surface-variant mt-0.5">${hint}</p>` : ''}
-    </div>`;
-}
-
 function bars(list, total) {
   if (!list.length) return '<p class="text-body-sm text-on-surface-variant">Sin datos en el periodo.</p>';
   return list
@@ -57,7 +31,7 @@ function bars(list, total) {
       (r) => `
       <div class="mb-2">
         <div class="flex justify-between text-body-sm"><span class="text-on-surface truncate">${escapeHtml(METHOD_LABEL[r.name] || r.name)}</span><span class="text-on-surface-variant shrink-0">${formatMoney(r.total)}</span></div>
-        <div class="h-1.5 rounded-full bg-surface-container-high overflow-hidden"><div class="h-full bg-primary" style="width:${total ? Math.max(2, Math.round((r.total / total) * 100)) : 0}%"></div></div>
+        ${ratioBar(total ? Math.max(2, Math.round((r.total / total) * 100)) : 0)}
       </div>`
     )
     .join('');
@@ -66,20 +40,18 @@ function bars(list, total) {
 export async function mount(container, ctx) {
   const isAdmin = ctx.user?.role === 'admin';
   let tab = TABS.some((t) => t.key === ctx.routeParams.get('tab')) ? ctx.routeParams.get('tab') : 'caja';
-  let [from, to] = PRESETS.mes();
+  let [from, to] = DATE_PRESETS.mes[1]();
   let meta = { categories: { egreso: [], ingreso: [] }, methods: ['efectivo', 'transferencia', 'tarjeta', 'nequi', 'otro'] };
 
   container.innerHTML = `
-    <div class="flex justify-between items-end mb-margin-desktop flex-wrap gap-3">
+    <div class="flex justify-between items-end mb-gutter flex-wrap gap-3">
       <div>
         <h2 class="text-headline-lg font-headline-lg text-on-surface">Finanzas</h2>
         <p class="text-body-md font-body-md text-on-surface-variant mt-1">Plata que entra y sale, y quién debe.</p>
       </div>
       <div id="fn-actions" class="flex gap-2 flex-wrap"></div>
     </div>
-    <div class="flex gap-1 border-b border-outline-variant mb-gutter overflow-x-auto" role="tablist">
-      ${TABS.map((t) => `<button data-tab="${t.key}" role="tab" class="px-4 py-2.5 -mb-px border-b-2 text-body-sm font-label-bold inline-flex items-center gap-1.5 whitespace-nowrap"><span class="material-symbols-outlined text-[18px]">${t.icon}</span>${t.label}</button>`).join('')}
-    </div>
+    ${tabBarHtml(TABS, tab)}
     <div id="fn-range" class="flex flex-wrap items-end gap-3 mb-gutter"></div>
     <div id="fn-body"></div>
   `;
@@ -89,14 +61,7 @@ export async function mount(container, ctx) {
   const actionsEl = container.querySelector('#fn-actions');
 
   function paintTabs() {
-    container.querySelectorAll('[data-tab]').forEach((b) => {
-      const on = b.dataset.tab === tab;
-      b.classList.toggle('border-primary', on);
-      b.classList.toggle('text-on-surface', on);
-      b.classList.toggle('border-transparent', !on);
-      b.classList.toggle('text-on-surface-variant', !on);
-      b.setAttribute('aria-selected', on ? 'true' : 'false');
-    });
+    paintTabBar(container, tab);
     // Cartera no depende de fechas (es lo que se debe hoy).
     rangeEl.classList.toggle('hidden', tab === 'cartera');
     actionsEl.innerHTML =
@@ -107,29 +72,16 @@ export async function mount(container, ctx) {
   }
 
   function paintRange() {
-    rangeEl.innerHTML = `
-      <div><label class="${labelCls}">Desde</label><input id="fn-from" type="date" value="${from}" class="p-2 bg-surface-container-lowest border border-outline-variant rounded-md text-body-sm outline-none focus:border-outline" /></div>
-      <div><label class="${labelCls}">Hasta</label><input id="fn-to" type="date" value="${to}" class="p-2 bg-surface-container-lowest border border-outline-variant rounded-md text-body-sm outline-none focus:border-outline" /></div>
-      <div class="flex gap-1.5">
-        <button data-preset="hoy" class="px-3 py-2 border border-outline-variant rounded-md text-body-sm hover:bg-surface-container-low">Hoy</button>
-        <button data-preset="mes" class="px-3 py-2 border border-outline-variant rounded-md text-body-sm hover:bg-surface-container-low">Este mes</button>
-        <button data-preset="mes_pasado" class="px-3 py-2 border border-outline-variant rounded-md text-body-sm hover:bg-surface-container-low">Mes pasado</button>
-      </div>`;
-    rangeEl.querySelector('#fn-from').addEventListener('change', (e) => {
-      from = e.target.value;
-      load();
-    });
-    rangeEl.querySelector('#fn-to').addEventListener('change', (e) => {
-      to = e.target.value;
-      load();
-    });
-    rangeEl.querySelectorAll('[data-preset]').forEach((b) =>
-      b.addEventListener('click', () => {
-        [from, to] = PRESETS[b.dataset.preset]();
-        paintRange();
+    mountDateRange(rangeEl, {
+      idPrefix: 'fn',
+      from,
+      to,
+      presets: ['hoy', 'mes', 'mes_pasado'],
+      onChange: (f, t) => {
+        [from, to] = [f, t];
         load();
-      })
-    );
+      },
+    });
   }
 
   // ---- Caja ---------------------------------------------------------------------

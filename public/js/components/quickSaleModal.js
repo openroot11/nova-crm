@@ -45,8 +45,8 @@ export function openQuickSaleModal(ctx, onDone) {
           </div>
           ${dateFieldHtml('qs-fecha', 'Fecha y hora del cierre')}
           <div class="flex justify-end gap-2 pt-2">
-            <button type="button" id="qs-cancel" class="px-4 py-2 rounded-lg border border-outline-variant text-on-surface hover:bg-surface-container-low">Cancelar</button>
-            <button type="submit" id="qs-submit" class="px-4 py-2 rounded-lg bg-primary text-on-primary font-bold hover:opacity-90 transition-colors flex items-center gap-2">
+            <button type="button" id="qs-cancel" class="btn btn-secondary">Cancelar</button>
+            <button type="submit" id="qs-submit" class="btn btn-primary">
               <span class="material-symbols-outlined text-[18px]">bolt</span> Registrar venta
             </button>
           </div>

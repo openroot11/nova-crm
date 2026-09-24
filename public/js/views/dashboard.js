@@ -84,8 +84,8 @@ export async function mount(container, ctx) {
         <div class="px-gutter pt-gutter pb-3 flex items-center justify-between flex-wrap gap-3">
           <div class="flex items-center gap-2.5">
             <span class="relative flex h-2 w-2 shrink-0">
-              <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-60"></span>
-              <span class="relative inline-flex rounded-full h-2 w-2 bg-primary"></span>
+              <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-status-good opacity-60"></span>
+              <span class="relative inline-flex rounded-full h-2 w-2 bg-status-good"></span>
             </span>
             <h3 class="text-headline-md font-headline-md text-on-surface">Informe del Día</h3>
             <span class="text-body-sm font-body-sm text-on-surface-variant">${todayLabel()}</span>
@@ -210,7 +210,7 @@ export async function mount(container, ctx) {
               <span class="text-on-surface-variant">${a.asignados} · ${pct}%</span>
             </div>
             <div class="h-2 bg-surface-container-low rounded-full overflow-hidden">
-              <div class="h-full bg-primary rounded-full" style="width:${Math.max(2, pct)}%"></div>
+              <div class="h-full bg-on-surface-variant rounded-full" style="width:${Math.max(2, pct)}%"></div>
             </div>
           </div>`;
           })

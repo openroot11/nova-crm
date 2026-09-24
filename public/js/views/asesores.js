@@ -8,7 +8,7 @@ export async function mount(container, ctx) {
         <h1 class="text-headline-lg font-headline-lg text-on-surface tracking-tight">Gestión del Equipo</h1>
         <p class="text-body-md font-body-md text-on-surface-variant mt-1">Monitorea rendimiento y administra la prioridad en rotación de leads.</p>
       </div>
-      <button id="add-advisor-btn" class="px-4 py-2 bg-primary text-on-primary text-label-bold font-label-bold rounded-lg hover:bg-on-primary-fixed-variant transition-colors flex items-center gap-2 shadow-sm">
+      <button id="add-advisor-btn" class="btn btn-primary">
         <span class="material-symbols-outlined text-[18px]">person_add</span> Añadir Asesor
       </button>
     </div>
@@ -99,8 +99,8 @@ export async function mount(container, ctx) {
           <label class="block text-label-bold font-label-bold uppercase tracking-wide text-on-surface-variant mb-1">Rol</label>
           <input id="edit-adv-role" type="text" value="${escapeHtml(advisor.role || '')}" placeholder="Asesor Comercial" class="w-full p-2.5 border border-outline-variant rounded-md mb-4 outline-none focus:border-outline focus:ring-2 focus:ring-outline/20" />
           <div class="flex justify-end gap-2">
-            <button id="edit-adv-cancel" class="px-4 py-2 rounded-lg border border-outline-variant hover:bg-surface-container-low">Cancelar</button>
-            <button id="edit-adv-ok" class="px-4 py-2 rounded-lg bg-primary text-on-primary font-bold hover:bg-on-primary-fixed-variant">Guardar cambios</button>
+            <button id="edit-adv-cancel" class="btn btn-secondary">Cancelar</button>
+            <button id="edit-adv-ok" class="btn btn-primary">Guardar cambios</button>
           </div>
         `;
         body.querySelector('#edit-adv-cancel').addEventListener('click', close);
@@ -163,8 +163,8 @@ export async function mount(container, ctx) {
           <label class="block text-label-bold font-label-bold uppercase tracking-wide text-on-surface-variant mb-1">Rol</label>
           <input id="new-role" type="text" placeholder="Asesor Comercial" class="w-full p-2.5 border border-outline-variant rounded-md mb-4 outline-none focus:border-outline focus:ring-2 focus:ring-outline/20" />
           <div class="flex justify-end gap-2">
-            <button id="new-cancel" class="px-4 py-2 rounded-lg border border-outline-variant hover:bg-surface-container-low">Cancelar</button>
-            <button id="new-ok" class="px-4 py-2 rounded-lg bg-primary text-on-primary font-bold hover:bg-on-primary-fixed-variant">Añadir</button>
+            <button id="new-cancel" class="btn btn-secondary">Cancelar</button>
+            <button id="new-ok" class="btn btn-primary">Añadir</button>
           </div>
         `;
         body.querySelector('#new-cancel').addEventListener('click', close);

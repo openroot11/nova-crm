@@ -55,7 +55,7 @@ export async function mount(container, ctx) {
           ${statusRows.map(([s, n]) => `
             <div class="mb-2">
               <div class="flex justify-between text-body-sm"><span class="text-on-surface">${STATUS[s].label}</span><span class="text-on-surface-variant">${n}</span></div>
-              <div class="h-1.5 rounded-full bg-surface-container-high overflow-hidden"><div class="h-full bg-primary" style="width:${Math.round((n / maxStatus) * 100)}%"></div></div>
+              <div class="h-1.5 rounded-full bg-surface-container-high overflow-hidden"><div class="h-full bg-on-surface-variant" style="width:${Math.round((n / maxStatus) * 100)}%"></div></div>
             </div>`).join('')}
         </div>
         <div class="bg-surface-container-lowest border border-outline-variant rounded-xl shadow-sm overflow-x-auto">

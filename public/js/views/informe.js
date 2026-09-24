@@ -373,7 +373,7 @@ export async function mount(container, ctx) {
         <div class="bg-surface rounded-xl border border-outline-variant shadow-sm p-6">
           <div class="flex items-center justify-between mb-1 gap-3 flex-wrap">
             <h3 class="text-headline-md font-headline-md text-on-surface">Ventas del día</h3>
-            <button id="btn-quick-sale" class="px-3 py-1.5 bg-primary text-on-primary rounded-md font-label-bold text-label-bold hover:opacity-90 transition-colors flex items-center gap-1.5">
+            <button id="btn-quick-sale" class="btn btn-primary py-1.5">
               <span class="material-symbols-outlined text-[18px]">bolt</span> Registrar venta
             </button>
           </div>
@@ -405,7 +405,7 @@ export async function mount(container, ctx) {
               <button id="btn-copy" class="px-3 py-2 bg-surface-container-lowest text-on-surface border border-outline-variant rounded-md font-label-bold text-label-bold hover:bg-surface-container-low transition-colors flex items-center gap-2">
                 <span class="material-symbols-outlined text-[18px]">content_copy</span> Copiar texto
               </button>
-              <button id="btn-download" class="px-3 py-2 bg-primary text-on-primary rounded-md font-label-bold text-label-bold hover:opacity-90 transition-colors flex items-center gap-2">
+              <button id="btn-download" class="btn btn-primary">
                 <span class="material-symbols-outlined text-[18px]">download</span> Descargar imagen
               </button>
             </div>

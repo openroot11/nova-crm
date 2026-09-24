@@ -25,7 +25,7 @@ function toggleHtml(id, checked, title, desc) {
       </div>
       <label class="relative inline-flex items-center cursor-pointer shrink-0">
         <input id="${id}" type="checkbox" class="sr-only peer" ${checked ? 'checked' : ''} />
-        <div class="w-11 h-6 bg-outline-variant peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary"></div>
+        <div class="w-11 h-6 bg-outline-variant peer-focus:outline-none peer-focus-visible:ring-2 peer-focus-visible:ring-outline peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-surface rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-surface-container-lowest after:border-outline after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-inverse-surface"></div>
       </label>
     </div>
   `;
@@ -91,12 +91,12 @@ export async function mount(container, ctx) {
         </section>
 
         <section class="bg-surface-container-lowest border border-outline-variant rounded-xl p-gutter shadow-sm col-span-1 md:col-span-2 mt-4">
-          <div class="flex items-center justify-between gap-3 mb-6 border-b border-outline-variant pb-3">
+          <div class="flex items-center justify-between flex-wrap gap-3 mb-6 border-b border-outline-variant pb-3">
             <div class="flex items-center gap-3">
               <span class="material-symbols-outlined text-on-surface-variant text-2xl">sell</span>
               <h3 class="text-headline-md font-headline-md text-on-surface">Lista de precios (Cotizar)</h3>
             </div>
-            <button id="add-product-btn" class="px-4 py-2 bg-primary text-on-primary text-label-bold font-label-bold rounded-lg hover:bg-on-primary-fixed-variant transition-colors flex items-center gap-2 shadow-sm">
+            <button id="add-product-btn" class="btn btn-primary">
               <span class="material-symbols-outlined text-[18px]">add</span> Nuevo producto
             </button>
           </div>
@@ -153,21 +153,21 @@ export async function mount(container, ctx) {
             </div>
           </div>
           <div class="flex justify-end">
-            <button id="qs-company-save" class="px-4 py-2 rounded-lg bg-primary text-on-primary font-bold hover:bg-on-primary-fixed-variant">Guardar datos de la empresa</button>
+            <button id="qs-company-save" class="btn btn-primary">Guardar datos de la empresa</button>
           </div>
         </section>
 
         <section class="bg-surface-container-lowest border border-outline-variant rounded-xl p-gutter shadow-sm col-span-1 md:col-span-2 mt-4">
-          <div class="flex items-center justify-between gap-3 mb-6 border-b border-outline-variant pb-3">
+          <div class="flex items-center justify-between flex-wrap gap-3 mb-6 border-b border-outline-variant pb-3">
             <div class="flex items-center gap-3">
               <span class="material-symbols-outlined text-on-surface-variant text-2xl">hub</span>
               <h3 class="text-headline-md font-headline-md text-on-surface">Conexión con Odoo</h3>
             </div>
-            <div class="flex gap-2">
-              <button id="odoo-sync-btn" class="bg-surface-container hover:bg-surface-container-high text-on-surface px-4 py-2 rounded-lg text-label-bold font-label-bold border border-outline-variant transition-colors flex items-center gap-2">
+            <div class="flex gap-2 flex-wrap">
+              <button id="odoo-sync-btn" class="btn btn-secondary">
                 <span class="material-symbols-outlined text-sm">sync</span> Sincronizar estados
               </button>
-              <button id="odoo-test-btn" class="bg-surface-container hover:bg-surface-container-high text-on-surface px-4 py-2 rounded-lg text-label-bold font-label-bold border border-outline-variant transition-colors flex items-center gap-2">
+              <button id="odoo-test-btn" class="btn btn-secondary">
                 <span class="material-symbols-outlined text-sm">wifi_tethering</span> Probar conexión
               </button>
             </div>
@@ -177,12 +177,12 @@ export async function mount(container, ctx) {
         </section>
 
         <section class="bg-surface-container-lowest border border-outline-variant rounded-xl p-gutter shadow-sm col-span-1 md:col-span-2 mt-4">
-          <div class="flex items-center justify-between gap-3 mb-6 border-b border-outline-variant pb-3">
+          <div class="flex items-center justify-between flex-wrap gap-3 mb-6 border-b border-outline-variant pb-3">
             <div class="flex items-center gap-3">
               <span class="material-symbols-outlined text-on-surface-variant text-2xl">ads_click</span>
               <h3 class="text-headline-md font-headline-md text-on-surface">Conexión con Google Ads</h3>
             </div>
-            <button id="ga-sync-btn" class="bg-surface-container hover:bg-surface-container-high text-on-surface px-4 py-2 rounded-lg text-label-bold font-label-bold border border-outline-variant transition-colors flex items-center gap-2">
+            <button id="ga-sync-btn" class="btn btn-secondary">
               <span class="material-symbols-outlined text-sm">sync</span> Sincronizar ahora
             </button>
           </div>
@@ -191,12 +191,12 @@ export async function mount(container, ctx) {
         </section>
 
         <section class="bg-surface-container-lowest border border-outline-variant rounded-xl p-gutter shadow-sm col-span-1 md:col-span-2 mt-4">
-          <div class="flex items-center justify-between gap-3 mb-6 border-b border-outline-variant pb-3">
+          <div class="flex items-center justify-between flex-wrap gap-3 mb-6 border-b border-outline-variant pb-3">
             <div class="flex items-center gap-3">
               <span class="material-symbols-outlined text-on-surface-variant text-2xl">manage_accounts</span>
               <h3 class="text-headline-md font-headline-md text-on-surface">Usuarios y Roles</h3>
             </div>
-            <button id="add-user-btn" class="px-4 py-2 bg-primary text-on-primary text-label-bold font-label-bold rounded-lg hover:bg-on-primary-fixed-variant transition-colors flex items-center gap-2 shadow-sm">
+            <button id="add-user-btn" class="btn btn-primary">
               <span class="material-symbols-outlined text-[18px]">person_add</span> Nuevo usuario
             </button>
           </div>
@@ -557,8 +557,8 @@ export async function mount(container, ctx) {
             <label class="block text-label-bold font-label-bold uppercase tracking-wide text-on-surface-variant mb-1">Nueva contraseña</label>
             <input id="reset-password" type="password" minlength="4" class="w-full p-2.5 border border-outline-variant rounded-md mb-4 outline-none focus:border-outline focus:ring-2 focus:ring-outline/20" />
             <div class="flex justify-end gap-2">
-              <button id="reset-cancel" class="px-4 py-2 rounded-lg border border-outline-variant hover:bg-surface-container-low">Cancelar</button>
-              <button id="reset-ok" class="px-4 py-2 rounded-lg bg-primary text-on-primary font-bold hover:bg-on-primary-fixed-variant">Guardar</button>
+              <button id="reset-cancel" class="btn btn-secondary">Cancelar</button>
+              <button id="reset-ok" class="btn btn-primary">Guardar</button>
             </div>
           `;
           body.querySelector('#reset-cancel').addEventListener('click', close);
@@ -600,8 +600,8 @@ export async function mount(container, ctx) {
             ${advisorsCache.map((a) => `<option value="${a.id}">${escapeHtml(a.name)}</option>`).join('')}
           </select>
           <div class="flex justify-end gap-2">
-            <button id="new-cancel" class="px-4 py-2 rounded-lg border border-outline-variant hover:bg-surface-container-low">Cancelar</button>
-            <button id="new-ok" class="px-4 py-2 rounded-lg bg-primary text-on-primary font-bold hover:bg-on-primary-fixed-variant">Crear</button>
+            <button id="new-cancel" class="btn btn-secondary">Cancelar</button>
+            <button id="new-ok" class="btn btn-primary">Crear</button>
           </div>
         `;
         body.querySelector('#new-cancel').addEventListener('click', close);
@@ -676,8 +676,8 @@ export async function mount(container, ctx) {
           <p class="text-[11px] text-on-surface-variant mb-2">Se copia como valor por defecto a la línea cuando se elige este producto en una cotización -- el asesor la puede editar o borrar ahí sin afectar esta ficha.</p>
           <textarea id="pd-desc" rows="4" class="w-full p-2.5 border border-outline-variant rounded-md mb-4 outline-none focus:border-outline focus:ring-2 focus:ring-outline/20">${escapeHtml(product.description || '')}</textarea>
           <div class="flex justify-end gap-2">
-            <button id="pd-cancel" class="px-4 py-2 rounded-lg border border-outline-variant hover:bg-surface-container-low">Cancelar</button>
-            <button id="pd-ok" class="px-4 py-2 rounded-lg bg-primary text-on-primary font-bold hover:bg-on-primary-fixed-variant">Guardar</button>
+            <button id="pd-cancel" class="btn btn-secondary">Cancelar</button>
+            <button id="pd-ok" class="btn btn-primary">Guardar</button>
           </div>
         `;
         body.querySelector('#pd-cancel').addEventListener('click', close);
@@ -747,8 +747,8 @@ export async function mount(container, ctx) {
           <label class="block text-label-bold font-label-bold uppercase tracking-wide text-on-surface-variant mb-1">Descripción (opcional)</label>
           <textarea id="new-product-desc" rows="2" class="w-full p-2.5 border border-outline-variant rounded-md mb-4 outline-none focus:border-outline focus:ring-2 focus:ring-outline/20"></textarea>
           <div class="flex justify-end gap-2">
-            <button id="new-product-cancel" class="px-4 py-2 rounded-lg border border-outline-variant hover:bg-surface-container-low">Cancelar</button>
-            <button id="new-product-ok" class="px-4 py-2 rounded-lg bg-primary text-on-primary font-bold hover:bg-on-primary-fixed-variant">Crear</button>
+            <button id="new-product-cancel" class="btn btn-secondary">Cancelar</button>
+            <button id="new-product-ok" class="btn btn-primary">Crear</button>
           </div>
         `;
         body.querySelector('#new-product-cancel').addEventListener('click', close);

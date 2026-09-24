@@ -84,7 +84,8 @@ export async function mount(container, ctx) {
     }
     container.querySelector('#pg-label').textContent = `${MONTHS[month.getMonth()]} ${month.getFullYear()}`;
     bodyEl.innerHTML = `
-      <div class="bg-surface-container-lowest border border-outline-variant rounded-xl overflow-hidden">
+      <div class="bg-surface-container-lowest border border-outline-variant rounded-xl overflow-x-auto">
+       <div class="min-w-[720px]">
         <div class="grid grid-cols-7 border-b border-outline-variant">${DOW.map((d) => `<div class="px-2 py-2 text-[11px] font-label-bold uppercase text-on-surface-variant">${d}</div>`).join('')}</div>
         <div class="grid grid-cols-7">
           ${cells.map((day) => {
@@ -94,7 +95,7 @@ export async function mount(container, ctx) {
             return `
               <div class="min-h-[108px] border-b border-r border-outline-variant p-1.5 ${inMonth ? '' : 'opacity-40'} ${busy ? 'bg-error-container/20' : ''}">
                 <div class="flex justify-between items-center mb-1">
-                  <span class="text-[12px] ${day === today ? 'w-6 h-6 rounded-full bg-primary text-on-primary flex items-center justify-center font-bold' : 'text-on-surface-variant'}">${parse(day).getDate()}</span>
+                  <span class="text-[12px] ${day === today ? 'w-6 h-6 rounded-full bg-on-surface text-surface flex items-center justify-center font-bold' : 'text-on-surface-variant'}">${parse(day).getDate()}</span>
                   ${busy ? '<span class="text-[10px] font-bold text-error" title="Muchas entregas el mismo día">Sobrecarga</span>' : ''}
                 </div>
                 <div class="space-y-1">
@@ -104,6 +105,7 @@ export async function mount(container, ctx) {
               </div>`;
           }).join('')}
         </div>
+       </div>
       </div>`;
   }
 
@@ -124,7 +126,7 @@ export async function mount(container, ctx) {
         <div class="min-w-[900px]">
           <div class="grid border-b border-outline-variant" style="grid-template-columns: 220px repeat(${TL_DAYS}, ${colW})">
             <div class="px-3 py-2 text-[11px] font-label-bold uppercase text-on-surface-variant">Responsable / OP</div>
-            ${days.map((d) => `<div class="py-2 text-center text-[10px] ${d === today ? 'text-primary font-bold' : 'text-on-surface-variant'}">${DOW[(parse(d).getDay() + 6) % 7]}<br/>${parse(d).getDate()}</div>`).join('')}
+            ${days.map((d) => `<div class="py-2 text-center text-[10px] ${d === today ? 'text-on-surface font-bold underline underline-offset-4' : 'text-on-surface-variant'}">${DOW[(parse(d).getDay() + 6) % 7]}<br/>${parse(d).getDate()}</div>`).join('')}
           </div>
           ${Object.entries(groups).sort(([a], [b]) => (a === 'Sin responsable') - (b === 'Sin responsable') || a.localeCompare(b)).map(([name, list]) => `
             <div class="grid border-b border-outline-variant bg-surface-container-low" style="grid-template-columns: 220px repeat(${TL_DAYS}, ${colW})">

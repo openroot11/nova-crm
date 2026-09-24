@@ -113,7 +113,7 @@ export async function mount(container, ctx) {
           <button id="reporte-pdf" class="px-3 py-2 border border-outline-variant rounded-md text-label-bold font-label-bold text-on-surface hover:bg-surface-container-low transition-colors flex items-center gap-1.5">
             <span class="material-symbols-outlined text-[16px]">picture_as_pdf</span> Descargar PDF
           </button>
-          <button id="reporte-archivar" class="px-3 py-2 bg-primary text-on-primary rounded-md text-label-bold font-label-bold hover:bg-on-primary-fixed-variant transition-colors flex items-center gap-1.5">
+          <button id="reporte-archivar" class="btn btn-primary">
             <span class="material-symbols-outlined text-[16px]">archive</span> Generar y archivar
           </button>
         </div>

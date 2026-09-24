@@ -37,7 +37,7 @@ function renderOverlay(firstRun, onSuccess) {
             class="w-full p-2.5 bg-surface-container-lowest border border-outline-variant rounded-md text-body-md focus:border-outline focus:ring-2 focus:ring-outline/20 outline-none transition-all" />
         </div>` : ''}
         <p id="auth-error" class="text-body-sm font-body-sm text-error hidden"></p>
-        <button type="submit" class="w-full py-3 bg-primary text-on-primary rounded-md font-label-bold text-label-bold hover:bg-on-primary-fixed-variant transition-colors">
+        <button type="submit" class="btn btn-primary w-full py-3">
           ${firstRun ? 'CREAR CUENTA E INGRESAR' : 'INGRESAR'}
         </button>
       </form>
